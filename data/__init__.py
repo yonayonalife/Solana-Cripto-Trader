@@ -9,8 +9,12 @@ from data.historical_data import (
     get_historical_data
 )
 
+# Alias for easier importing
+DataManager = HistoricalDataManager
+
 __all__ = [
     "HistoricalDataManager",
+    "DataManager",  # Alias
     "DexScreenerClient",
     "HeliusClient",
     "Candle",

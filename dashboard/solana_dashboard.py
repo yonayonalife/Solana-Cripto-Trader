@@ -479,8 +479,8 @@ with tab3:
         st.subheader("📊 Historical Data Sources")
         
         try:
-            from data.historical_data import DataManager
-            manager = DataManager()
+            from data.historical_data import HistoricalDataManager
+            manager = HistoricalDataManager()
             summary = manager.get_data_summary()
             
             col_d1, col_d2, col_d3 = st.columns(3)
