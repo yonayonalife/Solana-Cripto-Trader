@@ -368,26 +368,6 @@ class MACDStrategy(Strategy):
                 metadata={"macd": macd, "signal": signal, "hist": hist}
             )
         
-        # Trend continuation
-        if hist > 0:
-            return TradingSignal(
-                signal=SignalType.BUY,
-                strategy=self.name,
-                confidence=0.5,
-                price=price,
-                timestamp=datetime.now(),
-                metadata={"macd": macd, "signal": signal, "hist": hist, "note": "continuation"}
-            )
-        elif hist < 0:
-            return TradingSignal(
-                signal=SignalType.SELL,
-                strategy=self.name,
-                confidence=0.5,
-                price=price,
-                timestamp=datetime.now(),
-                metadata={"macd": macd, "signal": signal, "hist": hist, "note": "continuation"}
-            )
-        
         return TradingSignal(
             signal=SignalType.HOLD,
             strategy=self.name,
