@@ -115,7 +115,8 @@ class CryptoWorker:
         """Poll coordinator for work"""
         try:
             resp = requests.get(
-                f"{self.coordinator_url}/api/get_work/{self.worker_id}",
+                f"{self.coordinator_url}/api/get_work",
+                params={"worker_id": self.worker_id},
                 timeout=10
             )
             if resp.status_code == 200:
