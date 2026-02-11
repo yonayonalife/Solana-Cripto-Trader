@@ -1,0 +1,96 @@
+{
+  "agents": {
+    "defaults": {
+      "model": {
+        "primary": "minimax/MiniMax-M2.1",
+        "fallbacks": [
+          "minimax/MiniMax-M2.1-lightning"
+        ]
+      },
+      "subagents": {
+        "maxConcurrent": 8,
+        "defaultModel": "minimax/MiniMax-M2.1-lightning"
+      }
+    },
+    "roles": {
+      "coordinator": {
+        "description": "Project lead, task breakdown and delegation",
+        "capabilities": ["planning", "delegation", "monitoring", "reporting"]
+      },
+      "researcher": {
+        "description": "Web search and data synthesis",
+        "capabilities": ["web_search", "web_fetch", "sentiment_analysis"]
+      },
+      "devbot": {
+        "description": "Code writing and debugging",
+        "capabilities": ["exec", "read", "write", "edit", "git"]
+      },
+      "auditor": {
+        "description": "Security review and compliance",
+        "capabilities": ["security_scan", "code_review", "compliance_check"]
+      },
+      "ux_manager": {
+        "description": "Interface and visualization",
+        "capabilities": ["dashboard", "visualization", "reports"]
+      }
+    }
+  },
+  "models": {
+    "providers": {
+      "minimax": {
+        "api": "anthropic-messages",
+        "apiKey": "YOUR_MINIMAX_API_KEY",
+        "baseUrl": "https://api.minimax.io/anthropic/v1",
+        "timeout": 120
+      }
+    },
+    "brain_and_muscles": {
+      "brain": "minimax/MiniMax-M2.1",
+      "muscles": "minimax/MiniMax-M2.1-lightning"
+    }
+  },
+  "security": {
+    "approvals": {
+      "exec": {
+        "enabled": true
+      },
+      "trades": {
+        "enabled": true,
+        "threshold": 0.1,
+        "message": "Trade requires manual approval"
+      },
+      "api_keys": {
+        "enabled": true,
+        "redaction": true
+      }
+    },
+    "sandbox": {
+      "enabled": true,
+      "docker": true
+    },
+    "redaction": {
+      "enabled": true,
+      "patterns": ["api_key", "password", "secret", "token"]
+    }
+  },
+  "gateway": {
+    "bind": "loopback",
+    "port": 8080
+  },
+  "messaging": {
+    "sessions": {
+      "max_concurrent": 8,
+      "timeout": 300
+    }
+  },
+  "memory": {
+    "flush_before_compact": true,
+    "persist_to_disk": true
+  },
+  "trading": {
+    "max_position_pct": 0.2,
+    "max_daily_loss_pct": 0.05,
+    "require_approval_above": 0.1,
+    "emergency_stop": true
+  }
+}
