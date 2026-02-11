@@ -468,25 +468,63 @@ with tab3:
         
         st.markdown("---")
         
+        # Data Sources Info
+        st.subheader("📊 Historical Data Sources")
+        
+        try:
+            from data.historical_data import DataManager
+            manager = DataManager()
+            summary = manager.get_data_summary()
+            
+            col_d1, col_d2, col_d3 = st.columns(3)
+            
+            with col_d1:
+                st.info(f"**Available Tokens:** {', '.join(summary['available_tokens'])}")
+            with col_d2:
+                st.info(f"**Timeframes:** {', '.join(summary['available_timeframes'])}")
+            with col_d3:
+                st.info(f"**Total Candles:** {summary['total_candles']:,}")
+            
+            if summary['cache_files']:
+                with st.expander("📁 Cache Files"):
+                    for f in summary['cache_files']:
+                        st.write(f"  - {f['file']}: {f['candles']:,} candles")
+        except Exception as e:
+            st.warning(f"Data module: {e}")
+        
+        st.markdown("---")
+        
         # Backtest section
         st.subheader("📈 Backtest Results")
         
         if strategies:
-            col_bt1, col_bt2 = st.columns(2)
+            col_bt1, col_bt2, col_bt3 = st.columns(3)
             
             with col_bt1:
                 bt_strategy = st.selectbox(
-                    "Select strategy to backtest",
-                    [s["name"] for s in strategies]
+                    "Select strategy",
+                    [s["name"] for s in strategies],
+                    key="bt_strategy"
                 )
             
             with col_bt2:
+                bt_days = st.selectbox(
+                    "Historical Days",
+                    [30, 90, 180, 365, 730, 1095],
+                    index=3,
+                    format_func=lambda x: f"{x} days ({x//365} years)" if x >= 365 else f"{x} days"
+                )
+            
+            with col_bt3:
+                st.write("")  # Spacer
+                st.write("")
                 if st.button("🏃 Run Backtest", type="primary"):
-                    with st.spinner("Running backtest..."):
-                        results = runner.run_backtest(bt_strategy)
+                    with st.spinner(f"Running backtest with {bt_days} days of data..."):
+                        results = runner.run_backtest(bt_strategy, days=bt_days)
                         
-                        st.success(f"Backtest complete!")
+                        st.success("Backtest complete!")
                         
+                        # Results
                         col_r1, col_r2, col_r3, col_r4 = st.columns(4)
                         with col_r1:
                             st.metric("Trades", results.get("total_trades", 0))
@@ -498,6 +536,28 @@ with tab3:
                             st.metric("Return", f"{ret:.2f}%")
                         with col_r4:
                             st.metric("Avg PnL", f"{results.get('avg_pnl', 0)*100:.2f}%")
+                        
+                        # Data info
+                        if "data_info" in results:
+                            st.caption(f"📊 Data: {results['data_info']['total_candles']:,} candles | "
+                                     f"Range: {results['data_info']['date_range'][:10]}")
+            
+            # Run backtest immediately if strategies exist
+            if strategies:
+                with st.spinner("Running initial backtest..."):
+                    results = runner.run_backtest(strategies[0]["name"], days=90)
+                    
+                    col_r1, col_r2, col_r3, col_r4 = st.columns(4)
+                    with col_r1:
+                        st.metric("Trades", results.get("total_trades", 0))
+                    with col_r2:
+                        wr = results.get("win_rate", 0) * 100
+                        st.metric("Win Rate", f"{wr:.1f}%")
+                    with col_r3:
+                        ret = results.get("total_return", 0) * 100
+                        st.metric("Return", f"{ret:.2f}%")
+                    with col_r4:
+                        st.metric("Avg PnL", f"{results.get('avg_pnl', 0)*100:.2f}%")
         
         # Recent signals
         st.markdown("---")

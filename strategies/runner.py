@@ -134,18 +134,46 @@ class StrategyRunner:
         """Get all recent signals"""
         return self.state.signals[-50:]  # Last 50 signals
     
-    def run_backtest(self, strategy_name: str, df: pd.DataFrame = None) -> Dict:
-        """Run backtest for a strategy"""
+    def run_backtest(self, strategy_name: str, df: pd.DataFrame = None, days: int = 365) -> Dict:
+        """Run backtest for a strategy with real historical data"""
         if strategy_name not in self.state.active_strategies:
             return {"error": f"Strategy not found: {strategy_name}"}
         
         strategy = self.state.active_strategies[strategy_name]["strategy"]
         
+        # Try to get real data if not provided
         if df is None:
-            df = generate_sample_data(1000)
+            try:
+                from data.historical_data import DataManager
+                manager = DataManager()
+                
+                # Get pair info from config
+                config = self.state.active_strategies[strategy_name]["config"]
+                pair = config.pair.split("-")
+                
+                if len(pair) == 2 and pair[0] in manager.TOKENS:
+                    base = pair[0]
+                    quote = pair[1] if pair[1] in manager.TOKENS else "USDC"
+                    df = manager.get_pair_history(base, quote_token=quote, timeframe="1h", days=days)
+                else:
+                    df = manager.get_sol_history(timeframe="1h", days=days)
+                
+                if len(df) < 100:
+                    raise ValueError("Not enough data, using sample")
+                    
+            except Exception as e:
+                logger.warning(f"Using sample data: {e}")
+                df = generate_sample_data(min(days * 24, 1000))
         
         from strategies import backtest_strategy
         results = backtest_strategy(strategy, df)
+        
+        # Add data info
+        results["data_info"] = {
+            "total_candles": len(df),
+            "date_range": f"{df['timestamp'].min()} to {df['timestamp'].max()}",
+            "days": days
+        }
         
         return results
     
@@ -159,9 +187,23 @@ class StrategyRunner:
         config = data["config"]
         
         try:
-            # Get price data (simulated for now)
-            # In real implementation, fetch from Jupiter/Helius
-            df = generate_sample_data(100)
+            # Try to get real data from historical module
+            try:
+                from data.historical_data import DataManager
+                manager = DataManager()
+                pair = config.pair.split("-")
+                if len(pair) == 2:
+                    base = pair[0]
+                    df = manager.get_pair_history(base, quote_token=pair[1], timeframe="1h", days=90)
+                else:
+                    df = manager.get_sol_history(timeframe="1h", days=90)
+                
+                if len(df) < 100:
+                    raise ValueError("Not enough data")
+                    
+            except Exception:
+                # Fallback to sample data
+                df = generate_sample_data(100)
             
             # Calculate indicators
             df = strategy.calculate_indicators(df.copy())
