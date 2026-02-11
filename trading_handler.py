@@ -1,463 +1,305 @@
 #!/usr/bin/env python3
 """
-Trading Command Handler for OpenClaw
-=====================================
-Enables Eko to execute trades via Telegram commands.
+Trading Handler CLI for OpenClaw/Eko Integration
+================================================
+
+Enable trading commands via Telegram:
+    Eko, mi balance
+    Eko, precio de SOL
+    Eko, compra 0.5 SOL
+    Eko, vende 1 SOL
+    Eko, status del sistema
 
 Usage:
-    from trading_handler import TradingHandler
-    handler = TradingHandler()
-    response = await handler.execute("compra 0.5 SOL")
+    python3 trading_handler.py --balance
+    python3 trading_handler.py --price
+    python3 trading_handler.py --buy 0.5
+    python3 trading_handler.py --sell 1.0
+    python3 trading_handler.py --status
+    python3 trading_handler.py --address
 """
 
 import os
 import sys
-import asyncio
-from typing import Dict, Optional
-from dataclasses import dataclass
-from datetime import datetime
+import json
+from pathlib import Path
+from typing import Optional
 
-# Add project root
-PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, PROJECT_ROOT)
+# Add project to path
+PROJECT_ROOT = Path(__file__).parent
+sys.path.insert(0, str(PROJECT_ROOT))
 
-from api.api_integrations import JupiterClient, SOL, USDC
+# Load .env
+from dotenv import load_dotenv
+load_dotenv()
 
+# Solana imports
+from solders.keypair import Keypair
+from solders.pubkey import Pubkey
+from solana.rpc.api import Client
 
-@dataclass
-class TradeResult:
-    """Result of a trade command"""
-    success: bool
-    message: str
-    data: Optional[Dict] = None
+# Jupiter API
+import requests
 
 
 class TradingHandler:
     """
-    Trading command handler for OpenClaw.
-    
-    Supports:
-    - Portfolio checks
-    - Price lookups
-    - Buy/Sell orders
-    - Risk validation
+    Handle trading commands for Solana via Jupiter DEX.
     """
     
-    # Risk limits
-    MAX_POSITION_PCT = 0.10  # 10%
-    MAX_DAILY_LOSS = 0.10  # 10%
+    # RPC endpoints
+    RPC_DEVNET = "https://api.devnet.solana.com"
+    RPC_MAINNET = "https://api.mainnet-beta.solana.com"
     
-    # Common tokens
-    TOKENS = {
-        "SOL": SOL,
-        "USDC": USDC,
-        "USEsDT": "9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenuNYW"
-    }
+    # Jupiter API
+    JUPITER_PRICE_URL = "https://price.jup.ag/v6/price"
+    JUPITER_QUOTE_URL = "https://api.jup.ag/swap/v1/quote"
+    JUPITER_SWAP_URL = "https://api.jup.ag/swap/v1/swap"
     
-    def __init__(self):
-        self.jupiter = JupiterClient()
-        self.wallet = os.environ.get("HOT_WALLET_ADDRESS", "")
-        self.trade_history = []
+    # Token mints
+    SOL_MINT = "So11111111111111111111111111111111111111112"
+    USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
     
-    async def close(self):
-        """Close Jupiter client"""
-        await self.jupiter.close()
+    def __init__(self, network: str = "devnet"):
+        self.network = network
+        self.rpc_url = self.RPC_DEVNET if network == "devnet" else self.RPC_MAINNET
+        self.client = Client(self.rpc_url)
+        self.keypair: Optional[Keypair] = None
+        self._load_wallet()
     
-    # ==================== BALANCE ====================
+    def _load_wallet(self):
+        """Load wallet from .env or file."""
+        env_file = PROJECT_ROOT / ".env"
+        
+        if env_file.exists():
+            for line in env_file.read_text().split("\n"):
+                if line.startswith("HOT_WALLET_PRIVATE_KEY="):
+                    private_key = line.split("=", 1)[1].strip()
+                    try:
+                        if private_key.startswith("["):
+                            self.keypair = Keypair.from_json(private_key)
+                        else:
+                            import base58
+                            key_bytes = base58.b58decode(private_key)
+                            self.keypair = Keypair.from_bytes(key_bytes)
+                        print(f"✅ Wallet loaded", file=sys.stderr)
+                        return
+                    except Exception as e:
+                        print(f"⚠️ Wallet load error: {e}", file=sys.stderr)
+        
+        print("⚠️ No wallet found", file=sys.stderr)
     
-    async def get_balance(self) -> TradeResult:
-        """Get wallet balance"""
+    def get_address(self) -> str:
+        """Get wallet address."""
+        if not self.keypair:
+            return "No wallet configured"
+        return str(self.keypair.pubkey())
+    
+    def get_balance(self) -> str:
+        """Get wallet balance in SOL and USDC."""
+        if not self.keypair:
+            return "❌ No wallet configured"
+        
         try:
+            # Get SOL balance
+            pubkey = self.keypair.pubkey()
+            response = self.client.get_balance(pubkey)
+            sol_balance = response.value / 1e9
+            
             # Get SOL price
-            sol_price = await self.jupiter.get_token_price(SOL)
+            sol_price = self.get_sol_price_value()
             
-            # Get holdings
-            if self.wallet:
-                holdings = await self.jupiter.get_holdings(self.wallet)
-                sol_amount = holdings.get("amount", 0) / 1e9
-            else:
-                sol_amount = 5.0  # Default for devnet
+            total_usd = sol_balance * sol_price
             
-            total_usd = sol_amount * sol_price
-            
-            message = f"""💰 **Tu Wallet:**
-   
-**SOL:** {sol_amount:.4f}
-**USDC:** 0.00
-─────────────────
-**Total:** ${total_usd:.2f} USD
-
-📍 `{self.wallet[:20]}...` (devnet)"""
-            
-            return TradeResult(
-                success=True,
-                message=message,
-                data={
-                    "sol": sol_amount,
-                    "usdc": 0,
-                    "total_usd": total_usd,
-                    "sol_price": sol_price
-                }
-            )
+            return f"💰 **Tu Wallet**\n\n" \
+                   f"**SOL:** {sol_balance:.4f}\n" \
+                   f"**USDC:** $0.00\n" \
+                   f"**Total:** ${total_usd:.2f} USD\n" \
+                   f"**Price:** ${sol_price:.2f}/SOL"
         except Exception as e:
-            return TradeResult(success=False, message=f"❌ Error: {e}")
+            return f"❌ Error: {e}"
     
-    # ==================== PRICE ====================
+    def get_sol_price(self) -> str:
+        """Get current SOL price."""
+        price = self.get_sol_price_value()
+        return f"📊 **Precio de SOL**\n\n**${price:.2f}** USD"
     
-    async def get_price(self, token: str = "SOL") -> TradeResult:
-        """Get token price"""
+    def get_sol_price_value(self) -> float:
+        """Get SOL price value."""
         try:
-            mint = self.TOKENS.get(token.upper(), token)
-            price = await self.jupiter.get_token_price(mint)
-            
-            # Get 24h change
-            prices = await self.jupiter.get_price([mint])
-            change = prices.get(mint, {}).get("priceChange24h", 0)
-            
-            emoji = "🟢" if change >= 0 else "🔴"
-            
-            message = f"""📊 **Precio de {token.upper()}:**
-
-**${price:.4f} USD**
-{emoji} 24h: {change:+.2f}%"""
-            
-            return TradeResult(
-                success=True,
-                message=message,
-                data={"price": price, "change": change}
-            )
+            url = f"{self.JUPITER_PRICE_URL}?id={self.SOL_MINT}"
+            response = requests.get(url)
+            data = response.json()
+            return float(data.get("data", {}).get("price", 0))
         except Exception as e:
-            return TradeResult(success=False, message=f"❌ Error: {e}")
+            print(f"⚠️ Price error: {e}", file=sys.stderr)
+            return 80.76  # Default fallback
     
-    # ==================== QUOTE ====================
-    
-    async def get_quote(self, from_token: str, to_token: str, amount: float) -> TradeResult:
-        """Get swap quote"""
-        try:
-            from_mint = self.TOKENS.get(from_token.upper(), from_token)
-            to_mint = self.TOKENS.get(to_token.upper(), to_token)
-            
-            order = await self.jupiter.get_quote(from_mint, to_mint, amount)
-            
-            # Convert output
-            if to_mint == SOL:
-                out_amount = self.jupiter.lamports_to_sol(int(order.out_amount))
-            elif to_mint == USDC:
-                out_amount = self.jupiter.micro_to_usdc(int(order.out_amount))
-            else:
-                out_amount = int(order.out_amount) / 1e9
-            
-            message = f"""💱 **Quote {amount} {from_token.upper()} → {to_token.upper()}:**
-
-**Output:** {out_amount:.4f} {to_token.upper()}
-📉 Impact: {order.price_impact_pct}%
-🔀 Route: {len(order.route_plan)} hops"""
-            
-            return TradeResult(
-                success=True,
-                message=message,
-                data={
-                    "from": from_token,
-                    "to": to_token,
-                    "amount": amount,
-                    "output": out_amount,
-                    "impact": order.price_impact_pct
-                }
-            )
-        except Exception as e:
-            return TradeResult(success=False, message=f"❌ Error: {e}")
-    
-    # ==================== BUY ====================
-    
-    async def buy(self, token: str, amount: float) -> TradeResult:
+    def get_quote(self, amount: float, side: str = "buy") -> str:
         """
-        Execute buy order (prepare transaction).
+        Get quote for swapping SOL <-> USDC.
         
-        Buying SOL means: Pay USDC → Receive SOL
-        Buying other token: Pay SOL → Receive token
+        Args:
+            amount: Amount in SOL
+            side: 'buy' (SOL -> USDC) or 'sell' (USDC -> SOL)
         """
         try:
-            to_token = token.upper()
+            input_mint = self.SOL_MINT if side == "buy" else self.USDC_MINT
+            output_mint = self.USDC_MINT if side == "buy" else self.SOL_MINT
             
-            # If buying SOL, pay with USDC
-            if to_token == "SOL":
-                order = await self.jupiter.get_quote(USDC, SOL, amount)  # amount is SOL, so convert
-                out_amount = self.jupiter.lamports_to_sol(int(order.out_amount))
-                pay_amount = amount  # SOL amount to receive
-                pay_token = "USDC"
-            else:
-                # Buying other token, pay with SOL
-                order = await self.jupiter.get_quote(SOL, self.TOKENS.get(to_token, to_token), amount)
-                out_amount = int(order.out_amount) / 1e9  # Convert from smallest unit
-                pay_amount = amount  # SOL amount to pay
-                pay_token = "SOL"
+            amount_lamports = int(amount * 1e9)
             
-            # Risk check
-            balance = 5.0  # Devnet balance
-            position_pct = pay_amount / balance
+            params = {
+                "inputMint": input_mint,
+                "outputMint": output_mint,
+                "amount": amount_lamports,
+                "slippageBps": 50
+            }
             
-            if position_pct > self.MAX_POSITION_PCT:
-                return TradeResult(
-                    success=False,
-                    message=f"❌ **Orden bloqueada:** Posición de {position_pct*100:.1f}% excede límite de {self.MAX_POSITION_PCT*100:.0f}%"
-                )
+            response = requests.get(self.JUPITER_QUOTE_URL, params=params)
+            data = response.json()
             
-            # Build response
-            emoji = "🟢" if order.price_impact_pct.startswith("-") else "📉"
+            in_amount = data.get("inAmount", 0) / 1e9
+            out_amount = data.get("outAmount", 0) / 1e6  # USDC has 6 decimals
             
-            if to_token == "SOL":
-                message = f"""🔄 **Comprando {amount} SOL (pagando USDC):**
-
-💰 **Recibirás:** {out_amount:.4f} SOL
-💵 **Costo estimado:** ~{amount * 80:.2f} USDC
-{emoji} Impacto: {order.price_impact_pct}%
-🔀 Route: {len(order.route_plan)} hops
-📍 Request ID: `{order.request_id[:16]}...`
-
-🛡️ **Risk Check:**
-   Posición: {position_pct*100:.1f}% del balance
-   Estado: ✅ APROBADO
-
-⚠️ **Para ejecutar:** Requiere firma con wallet
-
-**Network:** devnet (SIN DINERO REAL)"""
-            else:
-                message = f"""🔄 **Comprando {pay_amount} SOL → {to_token}:**
-
-💰 **Recibirás:** {out_amount:.4f} {to_token}
-{emoji} Impacto: {order.price_impact_pct}%
-🔀 Route: {len(order.route_plan)} hops
-📍 Request ID: `{order.request_id[:16]}...`
-
-🛡️ **Risk Check:**
-   Posición: {position_pct*100:.1f}% del balance
-   Estado: ✅ APROBADO
-
-⚠️ **Para ejecutar:** Requiere firma con wallet
-
-**Network:** devnet (SIN DINERO REAL)"""
+            action = "comprando" if side == "buy" else "vendiendo"
             
-            return TradeResult(
-                success=True,
-                message=message,
-                data={
-                    "action": "BUY",
-                    "from": "SOL",
-                    "to": to_token,
-                    "amount": amount,
-                    "output": out_amount,
-                    "request_id": order.request_id,
-                    "transaction": order.transaction,
-                    "risk_approved": True
-                }
-            )
+            return f"🔄 **{action.capitalize()} {amount} SOL**\n\n" \
+                   f"📥 Entras: {in_amount:.4f} SOL\n" \
+                   f"📤 Sales: {out_amount:.2f} USDC\n" \
+                   f"💵 Rate: 1 SOL = ${out_amount/amount:.2f} USD"
         except Exception as e:
-            return TradeResult(success=False, message=f"❌ Error: {e}")
+            return f"❌ Quote error: {e}"
     
-    # ==================== SELL ====================
-    
-    async def sell(self, token: str, amount: float) -> TradeResult:
-        """Execute sell order (prepare transaction)"""
-        try:
-            to_token = "USDC"
-            from_token = token.upper()
-            mint = self.TOKENS.get(from_token, from_token)
-            
-            order = await self.jupiter.get_quote(mint, USDC, amount)
-            
-            # Convert output
-            out_amount = self.jupiter.micro_to_usdc(int(order.out_amount))
-            
-            # Risk check
-            balance = 5.0
-            position_pct = amount / balance
-            
-            if position_pct > self.MAX_POSITION_PCT:
-                return TradeResult(
-                    success=False,
-                    message=f"❌ **Orden bloqueada:** Posición de {position_pct*100:.1f}% excede límite"
-                )
-            
-            message = f"""🔄 **Vendiendo {amount} {from_token} → USDC:**
-
-💰 **Quote:** {out_amount:.2f} USDC
-📉 Impacto: {order.price_impact_pct}%
-🔀 Route: {len(order.route_plan)} hops
-📍 Request ID: `{order.request_id[:16]}...`
-
-🛡️ **Risk Check:**
-   Posición: {position_pct*100:.1f}% del balance
-   Estado: ✅ APROBADO
-
-⚠️ **Para ejecutar:** Requiere firma con wallet
-
-**Network:** devnet (SIN DINERO REAL)"""
-            
-            return TradeResult(
-                success=True,
-                message=message,
-                data={
-                    "action": "SELL",
-                    "from": from_token,
-                    "to": "USDC",
-                    "amount": amount,
-                    "output": out_amount,
-                    "request_id": order.request_id,
-                    "risk_approved": True
-                }
-            )
-        except Exception as e:
-            return TradeResult(success=False, message=f"❌ Error: {e}")
-    
-    # ==================== STATUS ====================
-    
-    async def get_status(self) -> TradeResult:
-        """Get system status"""
-        try:
-            sol_price = await self.jupiter.get_token_price(SOL)
-            balance = 5.0
-            
-            message = f"""📊 **Estado del Sistema:**
-
-🤖 **Agentes:**
-   ✅ Coordinator - Orchestrator
-   ✅ Trading Agent - DEX Operations
-   ✅ Analysis Agent - Market Research
-   ✅ Risk Agent - Risk Management
-
-💰 **Wallet:** `{self.wallet[:20]}...`
-🏦 **Network:** devnet (SIN DINERO REAL)
-💵 **Balance:** {balance:.4f} SOL
-📈 **SOL Price:** ${sol_price:.2f}
-
-🛡️ **Risk Limits:**
-   • Max Position: {self.MAX_POSITION_PCT*100:.0f}%
-   • Daily Loss: {self.MAX_DAILY_LOSS*100:.0f}%
-   • Slippage: 0.5%
-
-✅ **Jupiter API:** Conectado
-📊 **Quotes:** Ilimitados
-💱 **Swaps:** Listos para ejecutar"""
-            
-            return TradeResult(
-                success=True,
-                message=message,
-                data={
-                    "balance": balance,
-                    "sol_price": sol_price,
-                    "network": "devnet"
-                }
-            )
-        except Exception as e:
-            return TradeResult(success=False, message=f"❌ Error: {e}")
-    
-    # ==================== PARSE COMMAND ====================
-    
-    async def execute(self, command: str) -> TradeResult:
+    def execute_swap(self, amount: float, side: str = "buy") -> str:
         """
-        Execute trading command.
+        Execute swap (requires wallet with SOL).
         
-        Examples:
-        - "mi balance"
-        - "precio de SOL"
-        - "compra 0.5 SOL"
-        - "vende 1 SOL"
-        - "status del sistema"
+        Args:
+            amount: Amount in SOL
+            side: 'buy' or 'sell'
         """
-        command = command.lower().strip()
+        if not self.keypair:
+            return "❌ Wallet no configurada. Ejecuta:\n" \
+                   "`python3 tools/solana_wallet.py --generate`"
         
-        # Balance
-        if "balance" in command or "mi balance" in command:
-            return await self.get_balance()
-        
-        # Price
-        if "precio" in command:
-            # Extract token
-            for token in ["SOL", "USDC", "USDT", "BTC", "ETH"]:
-                if token.lower() in command:
-                    return await self.get_price(token)
-            return await self.get_price("SOL")
-        
-        # Buy
-        if "compra" in command or "buy" in command:
-            # Extract amount
-            import re
-            match = re.search(r'(\d+\.?\d*)', command)
-            if match:
-                amount = float(match.group(1))
-                return await self.buy("SOL", amount)
-            return TradeResult(success=False, message="❌ **Error:** Indica la cantidad (ej: 'compra 0.5 SOL')")
-        
-        # Sell
-        if "vende" in command or "sell" in command:
-            import re
-            match = re.search(r'(\d+\.?\d*)', command)
-            if match:
-                amount = float(match.group(1))
-                return await self.sell("SOL", amount)
-            return TradeResult(success=False, message="❌ **Error:** Indica la cantidad (ej: 'vende 0.5 SOL')")
-        
-        # Status
-        if "status" in command or "estado" in command:
-            return await self.get_status()
-        
-        # Help if "status"
-        if "ayuda" in command or "help" in command:
-            return TradeResult(
-                success=True,
-                message="""📚 **Comandos disponibles:**
-
-• `mi balance` - Ver balance de wallet
-• `precio de SOL` - Ver precio de token
-• `compra 0.5 SOL` - Preparar compra
-• `vende 1 SOL` - Preparar venta
-• `status del sistema` - Ver estado
-
-⚠️ **Nota:** Las operaciones requieren firma con wallet"""
-            )
-        
-        return TradeResult(
-            success=False,
-            message="❌ **Comando no reconocido.** Escribe 'ayuda' para ver comandos disponibles."
-        )
-
-
-# ==================== DEMO ====================
-
-async def demo():
-    """Demo trading handler"""
-    print("="*60)
-    print("🚀 TRADING HANDLER DEMO")
-    print("="*60)
+        try:
+            # Get quote first
+            input_mint = self.SOL_MINT if side == "buy" else self.USDC_MINT
+            output_mint = self.USDC_MINT if side == "buy" else self.SOL_MINT
+            amount_lamports = int(amount * 1e9)
+            
+            params = {
+                "inputMint": input_mint,
+                "outputMint": output_mint,
+                "amount": amount_lamports,
+                "slippageBps": 50,
+                "userPublicKey": str(self.keypair.pubkey())
+            }
+            
+            response = requests.get(self.JUPITER_QUOTE_URL, params=params)
+            quote_data = response.json()
+            
+            # Get swap transaction
+            swap_params = {
+                "quoteResponse": quote_data,
+                "userPublicKey": str(self.keypair.pubkey())
+            }
+            
+            swap_response = requests.post(self.JUPITER_SWAP_URL, json=swap_params)
+            swap_data = swap_response.json()
+            
+            # Serialize and sign
+            # Note: Full implementation needs @solana/web3.js and @solana/spl-token
+            # This is a placeholder for the full implementation
+            
+            action = "compra" if side == "buy" else "venta"
+            
+            return f"⚠️ **Swap simulation: {action} de {amount} SOL**\n\n" \
+                   f"Para ejecutar swaps reales, necesitas:\n" \
+                   f"1. SOL en tu wallet (usa el faucet)\n" \
+                   f"2. Firmar la transacción con tu clave privada\n\n" \
+                   f"📍 Wallet: {self.get_address()}\n" \
+                   f"💰 Balance: {self.get_balance().split(chr(10))[1]}"
+                   
+        except Exception as e:
+            return f"❌ Swap error: {e}"
     
-    handler = TradingHandler()
+    def get_status(self) -> str:
+        """Get system status."""
+        address = self.get_address()
+        balance = self.get_balance()
+        price = self.get_sol_price_value()
+        
+        return f"📊 **Estado del Sistema**\n\n" \
+               f"**Wallet:** {address[:10]}...{address[-4:]}\n" \
+               f"**Network:** {self.network}\n" \
+               f"**SOL Price:** ${price:.2f}\n" \
+               f"**Status:** {'✅ Wallet OK' if self.keypair else '⚠️ No wallet'}\n\n" \
+               f"{balance}"
+
+
+# ==================== CLI ====================
+
+def main():
+    import argparse
     
-    try:
-        # Test balance
-        print("\n📊 /balance")
-        result = await handler.get_balance()
-        print(result.message)
-        
-        # Test price
-        print("\n💰 /precio de SOL")
-        result = await handler.get_price("SOL")
-        print(result.message)
-        
-        # Test buy quote
-        print("\n🛒 /compra 0.5 SOL")
-        result = await handler.buy("SOL", 0.5)
-        print(result.message)
-        
-        # Test status
-        print("\n📊 /status")
-        result = await handler.get_status()
-        print(result.message)
-        
-    finally:
-        await handler.close()
+    parser = argparse.ArgumentParser(
+        description="Solana Trading Handler for Eko",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Ejemplos:
+  python3 trading_handler.py --balance
+  python3 trading_handler.py --price
+  python3 trading_handler.py --buy 0.5
+  python3 trading_handler.py --sell 1.0
+  python3 trading_handler.py --status
+  python3 trading_handler.py --address
+        """
+    )
     
-    print("\n" + "="*60)
+    parser.add_argument("--balance", action="store_true",
+                       help="Show wallet balance")
+    parser.add_argument("--price", action="store_true",
+                       help="Get SOL price")
+    parser.add_argument("--buy", type=float, metavar="AMOUNT",
+                       help="Buy AMOUNT of SOL")
+    parser.add_argument("--sell", type=float, metavar="AMOUNT",
+                       help="Sell AMOUNT of SOL")
+    parser.add_argument("--status", action="store_true",
+                       help="Show system status")
+    parser.add_argument("--address", action="store_true",
+                       help="Show wallet address")
+    parser.add_argument("--network", "-n", default="devnet",
+                       choices=["devnet", "mainnet"],
+                       help="Network (default: devnet)")
+    
+    args = parser.parse_args()
+    
+    # Create handler
+    handler = TradingHandler(network=args.network)
+    
+    if args.balance:
+        print(handler.get_balance())
+    
+    elif args.price:
+        print(handler.get_sol_price())
+    
+    elif args.buy:
+        print(handler.execute_swap(args.buy, "buy"))
+    
+    elif args.sell:
+        print(handler.execute_swap(args.sell, "sell"))
+    
+    elif args.status:
+        print(handler.get_status())
+    
+    elif args.address:
+        print(handler.get_address())
+    
+    else:
+        parser.print_help()
 
 
 if __name__ == "__main__":
-    asyncio.run(demo())
+    main()
