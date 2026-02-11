@@ -351,54 +351,169 @@ with tab2:
 # ============================================================================
 
 with tab3:
-    st.subheader("📈 Strategy Performance")
-
-    # Sample strategy results
-    strategies = [
-        {"name": "RSI_Breve", "pnl": 12.5, "trades": 45, "win_rate": 68.2, "sharpe": 1.85},
-        {"name": "SMA_Crossover", "pnl": 8.3, "trades": 32, "win_rate": 72.1, "sharpe": 1.52},
-        {"name": "EMA_Strategy", "pnl": -2.1, "trades": 28, "win_rate": 45.3, "sharpe": 0.42},
-        {"name": "Volume_Breakout", "pnl": 15.7, "trades": 18, "win_rate": 78.9, "sharpe": 2.15},
-        {"name": "Momentum", "pnl": 5.4, "trades": 55, "win_rate": 61.2, "sharpe": 1.25},
-    ]
-
-    df_strategies = pd.DataFrame(strategies)
-
-    # Sort by PnL
-    df_strategies = df_strategies.sort_values("pnl", ascending=False)
-
-    # Display strategies table
-    st.dataframe(
-        df_strategies,
-        width="stretch"
-    )
-
-    # Best strategy details
-    st.markdown("---")
-    st.subheader("🏆 Best Strategy Details")
-
-    best_strategy = df_strategies.iloc[0]
-
-    col_s1, col_s2, col_s3, col_s4 = st.columns(4)
-
-    with col_s1:
-        st.metric("Strategy", best_strategy["name"])
-    with col_s2:
-        st.metric("PnL", f"{best_strategy['pnl']:.1f}%")
-    with col_s3:
-        st.metric("Win Rate", f"{best_strategy['win_rate']:.1f}%")
-    with col_s4:
-        st.metric("Sharpe Ratio", f"{best_strategy['sharpe']:.2f}")
-
-    # Strategy genome
-    with st.expander("🧬 Strategy Genome"):
-        st.code(json.dumps({
-            "sl_pct": 0.03,
-            "tp_pct": 0.06,
-            "rsi_period": 14,
-            "rsi_oversold": 30,
-            "rsi_overbought": 70,
-        }, indent=2))
+    st.subheader("📈 Trading Strategies")
+    
+    try:
+        from strategies.runner import get_runner, runner_start, runner_stop
+        from strategies import StrategyFactory
+        
+        # Get runner status
+        runner = get_runner()
+        status = runner.get_status()
+        
+        # Strategy controls
+        col_c1, col_c2, col_c3 = st.columns(3)
+        
+        with col_c1:
+            if st.button("▶️ Start Runner", type="primary"):
+                runner.start()
+                st.rerun()
+        
+        with col_c2:
+            if st.button("⏹️ Stop Runner"):
+                runner.stop()
+                st.rerun()
+        
+        with col_c3:
+            st.metric("Status", status["running"] and "🟢 Running" or "🔴 Stopped")
+        
+        st.markdown("---")
+        
+        # Add new strategy
+        st.subheader("➕ Add Strategy")
+        
+        col_a1, col_a2, col_a3 = st.columns(3)
+        
+        with col_a1:
+            strategy_type = st.selectbox(
+                "Strategy Type",
+                ["rsi", "sma_crossover", "ema_crossover", "macd", "bollinger", "combined"],
+                format_func=lambda x: {
+                    "rsi": "RSI (Overbought/Oversold)",
+                    "sma_crossover": "SMA Crossover",
+                    "ema_crossover": "EMA Crossover",
+                    "macd": "MACD",
+                    "bollinger": "Bollinger Bands",
+                    "combined": "Combined (Multi-indicator)"
+                }.get(x, x)
+            )
+        
+        with col_a2:
+            pair = st.selectbox("Trading Pair", ["SOL-USDC", "SOL-USDT", "JUP-SOL", "BONK-USDC"])
+        
+        with col_a3:
+            min_confidence = st.slider("Min Confidence", 0.3, 0.9, 0.6)
+        
+        # Strategy-specific parameters
+        params = {}
+        if strategy_type == "rsi":
+            col_p1, col_p2 = st.columns(2)
+            with col_p1:
+                params["rsi_period"] = st.number_input("RSI Period", 7, 21, 14)
+            with col_p2:
+                params["oversold"] = st.number_input("Oversold", 20, 40, 30)
+                params["overbought"] = st.number_input("Overbought", 60, 80, 70)
+        elif strategy_type in ["sma_crossover", "ema_crossover"]:
+            col_p1, col_p2 = st.columns(2)
+            with col_p1:
+                params["fast_period"] = st.number_input("Fast Period", 5, 20, 10)
+            with col_p2:
+                params["slow_period"] = st.number_input("Slow Period", 20, 50, 30)
+        elif strategy_type == "macd":
+            col_p1, col_p2, col_p3 = st.columns(3)
+            with col_p1:
+                params["fast_period"] = st.number_input("Fast Period", 8, 20, 12)
+            with col_p2:
+                params["slow_period"] = st.number_input("Slow Period", 20, 40, 26)
+            with col_p3:
+                params["signal_period"] = st.number_input("Signal Period", 5, 15, 9)
+        
+        strategy_name = f"{strategy_type}_{pair.replace('-', '').lower()}"
+        
+        if st.button("➕ Add Strategy", type="primary"):
+            config = {
+                "type": strategy_type,
+                "parameters": params,
+                "pair": pair,
+                "min_confidence": min_confidence,
+                "auto_execute": False
+            }
+            runner.add_strategy(strategy_name, config)
+            st.success(f"Strategy added: {strategy_name}")
+            st.rerun()
+        
+        st.markdown("---")
+        
+        # Active strategies
+        st.subheader("📋 Active Strategies")
+        
+        strategies = runner.list_strategies()
+        if strategies:
+            for s in strategies:
+                with st.expander(f"📊 {s['name']} ({s['type']})"):
+                    col_s1, col_s2, col_s3, col_s4 = st.columns(4)
+                    with col_s1:
+                        st.write(f"**Pair:** {s['pair']}")
+                    with col_s2:
+                        st.write(f"**Confidence:** {s.get('min_confidence', 0.6)*100:.0f}%")
+                    with col_s3:
+                        auto = "✅" if s.get('auto_execute') else "❌"
+                        st.write(f"**Auto-execute:** {auto}")
+                    with col_s4:
+                        if st.button(f"🗑️ Remove", key=f"remove_{s['name']}"):
+                            runner.remove_strategy(s['name'])
+                            st.rerun()
+        else:
+            st.info("No strategies configured. Add one above!")
+        
+        st.markdown("---")
+        
+        # Backtest section
+        st.subheader("📈 Backtest Results")
+        
+        if strategies:
+            col_bt1, col_bt2 = st.columns(2)
+            
+            with col_bt1:
+                bt_strategy = st.selectbox(
+                    "Select strategy to backtest",
+                    [s["name"] for s in strategies]
+                )
+            
+            with col_bt2:
+                if st.button("🏃 Run Backtest", type="primary"):
+                    with st.spinner("Running backtest..."):
+                        results = runner.run_backtest(bt_strategy)
+                        
+                        st.success(f"Backtest complete!")
+                        
+                        col_r1, col_r2, col_r3, col_r4 = st.columns(4)
+                        with col_r1:
+                            st.metric("Trades", results.get("total_trades", 0))
+                        with col_r2:
+                            wr = results.get("win_rate", 0) * 100
+                            st.metric("Win Rate", f"{wr:.1f}%")
+                        with col_r3:
+                            ret = results.get("total_return", 0) * 100
+                            st.metric("Return", f"{ret:.2f}%")
+                        with col_r4:
+                            st.metric("Avg PnL", f"{results.get('avg_pnl', 0)*100:.2f}%")
+        
+        # Recent signals
+        st.markdown("---")
+        st.subheader("📡 Recent Signals")
+        
+        signals = status.get("recent_signals", [])
+        if signals:
+            for sig in reversed(signals[-10:]):
+                icon = "🟢" if sig["signal"] == "buy" else ("🔴" if sig["signal"] == "sell" else "⚪")
+                st.write(f"{icon} **{sig['signal'].upper()}** | {sig['strategy']} | ${sig['price']:.2f} | {sig.get('confidence', 0)*100:.0f}% conf")
+        else:
+            st.info("No signals yet. Start the runner to generate signals!")
+        
+    except Exception as e:
+        st.error(f"Error loading strategies: {e}")
+        st.info("Try initializing strategies module...")
 
 
 # ============================================================================
