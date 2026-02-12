@@ -185,7 +185,7 @@ def precompute_indicators(df: pd.DataFrame) -> np.ndarray:
     # Pre-compute SMA
     for i, period in enumerate(SMA_PERIODS):
         sma = close_series.rolling(window=period).mean()
-        indicators[IND_SMA_BASE + i] = sma.fillna(close).values
+        indicators[IND_SMA_BASE + i] = sma.fillna(close_series).values
     
     # Pre-compute EMA
     for i, period in enumerate(EMA_PERIODS):

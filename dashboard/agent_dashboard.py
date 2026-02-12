@@ -401,42 +401,50 @@ class AgentMonitor:
 
 
 # ============================================================================
-# MAIN
+# MAIN - Streamlit entry point
 # ============================================================================
-if __name__ == "__main__":
+
+# Detect if running under Streamlit
+_is_streamlit = False
+try:
+    import streamlit.runtime.scriptrunner
+    _is_streamlit = True
+except ImportError:
+    try:
+        from streamlit import runtime
+        _is_streamlit = hasattr(runtime, 'exists') and runtime.exists()
+    except Exception:
+        pass
+
+if _is_streamlit or (os.environ.get("STREAMLIT_SERVER_PORT") or "streamlit" in sys.argv[0] if sys.argv else False):
+    # Running under Streamlit - render the dashboard
+    create_dashboard()
+
+elif __name__ == "__main__":
     import argparse
-    
+
     parser = argparse.ArgumentParser(description="Eko Multi-Agent Dashboard")
     parser.add_argument("--monitor", "-m", action="store_true", help="Run agent monitor (non-Streamlit)")
-    parser.add_argument("--dashboard", "-d", action="store_true", help="Launch Streamlit dashboard")
-    parser.add_argument("--port", "-p", type=int, default=8502, help="Dashboard port")
-    
-    args = parser.parse_args()
-    
-    if args.dashboard or not args.monitor:
-        print("🚀 Launching Multi-Agent Dashboard...")
-        print("   Open: http://localhost:8502")
-        
-        import subprocess
-        import sys
-        sys.argv = ["streamlit", "run", __file__, "--", "--server.port", str(args.port)]
-        subprocess.run(sys.argv)
-    
-    else:
+
+    args, _ = parser.parse_known_args()
+
+    if args.monitor:
         print("🚀 Starting Agent Monitor...")
         monitor = AgentMonitor()
-        
-        # Demo activities
+
         monitor.log_activity("User", "Coordinator", "Received command", "BUY 1 SOL")
         monitor.log_activity("Coordinator", "Risk", "Validate trade", "Position: 10%")
         monitor.log_activity("Risk", "Coordinator", "Approved", "Within limits")
         monitor.log_activity("Coordinator", "Trading", "Execute trade", "BUY 1 SOL @ market")
-        
+
         monitor.start_workflow("wf_001", "BUY 1 SOL")
         monitor.update_workflow("wf_001", "Portfolio Check", "completed")
         monitor.update_workflow("wf_001", "Get Quote", "completed")
         monitor.update_workflow("wf_001", "Risk Validation", "completed")
         monitor.update_workflow("wf_001", "Execute Trade", "processing")
         monitor.complete_workflow("wf_001")
-        
+
         monitor.print_summary()
+    else:
+        # Default: just call the dashboard function (streamlit runs this)
+        create_dashboard()

@@ -1,0 +1,972 @@
+#!/usr/bin/env python3
+"""
+Agent Brain - Self-Improving Strategy Discovery System
+======================================================
+Runs alongside agent_runner.py to continuously:
+- Scout best tokens to trade
+- Collect historical market data
+- Backtest strategies against real data
+- Optimize strategies via genetic algorithm
+- Learn from past performance
+- Deploy winning strategies to live trading
+
+Usage:
+    python3 agent_brain.py                # Standard mode
+    python3 agent_brain.py --interval 300 # 5-min base cycle
+    python3 agent_brain.py --fast         # 2-min cycles (dev)
+"""
+
+import os
+import sys
+import json
+import asyncio
+import logging
+import signal
+import random
+import sqlite3
+import numpy as np
+import pandas as pd
+from datetime import datetime, timedelta
+from typing import Dict, List, Optional
+from pathlib import Path
+
+PROJECT_ROOT = Path(__file__).parent
+sys.path.insert(0, str(PROJECT_ROOT))
+
+from api.api_integrations import JupiterClient, SOL, USDC, USDT
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
+    handlers=[
+        logging.StreamHandler(),
+        logging.FileHandler(PROJECT_ROOT / "agent_brain.log")
+    ]
+)
+logger = logging.getLogger("agent_brain")
+
+# Paths
+DATA_DIR = PROJECT_ROOT / "data"
+KNOWLEDGE_DIR = DATA_DIR / "knowledge"
+WATCHLIST_FILE = DATA_DIR / "token_watchlist.json"
+ACTIVE_STRATEGIES_FILE = DATA_DIR / "active_strategies.json"
+OPTIMIZED_FILE = DATA_DIR / "optimized_strategies.json"
+BRAIN_STATE_FILE = PROJECT_ROOT / "brain_state.json"
+DB_PATH = str(DATA_DIR / "genetic_results.db")
+
+# Ensure dirs exist
+DATA_DIR.mkdir(exist_ok=True)
+KNOWLEDGE_DIR.mkdir(exist_ok=True)
+
+
+# ============================================================================
+# TOKEN SCOUT AGENT
+# ============================================================================
+
+class TokenScoutAgent:
+    """Scans and ranks tokens for trading opportunities."""
+
+    def __init__(self, jupiter: JupiterClient):
+        self.jupiter = jupiter
+        self.last_watchlist: List[Dict] = []
+
+    async def scout(self) -> List[Dict]:
+        """Scan trending tokens, filter, and rank."""
+        logger.info("[Scout] Scanning for tokens...")
+        candidates = []
+
+        # Fetch trending from multiple timeframes
+        for interval in ["1h", "1d"]:
+            try:
+                trending = await self.jupiter.get_trending_tokens(interval)
+                if trending:
+                    for t in trending[:15]:
+                        addr = t.get("address", t.get("mint", ""))
+                        symbol = t.get("symbol", "?")
+                        if addr and symbol not in [c.get("symbol") for c in candidates]:
+                            candidates.append({
+                                "symbol": symbol,
+                                "address": addr,
+                                "name": t.get("name", symbol),
+                                "source": f"trending_{interval}",
+                            })
+            except Exception as e:
+                logger.warning(f"[Scout] Trending {interval} error: {e}")
+
+        # Get prices for candidates
+        ranked = []
+        if candidates:
+            mints = [c["address"] for c in candidates[:20]]
+            try:
+                prices = await self.jupiter.get_price(mints)
+                for c in candidates:
+                    price_data = prices.get(c["address"], {})
+                    price = float(price_data.get("price", 0)) if isinstance(price_data, dict) else 0
+                    if price > 0:
+                        c["price"] = price
+                        c["timestamp"] = datetime.now().isoformat()
+                        ranked.append(c)
+            except Exception as e:
+                logger.warning(f"[Scout] Price fetch error: {e}")
+
+        # Always include SOL as base
+        try:
+            sol_price = await self.jupiter.get_token_price(SOL)
+            if sol_price > 0:
+                has_sol = any(c.get("symbol") == "SOL" for c in ranked)
+                if not has_sol:
+                    ranked.insert(0, {
+                        "symbol": "SOL",
+                        "address": SOL,
+                        "name": "Solana",
+                        "price": sol_price,
+                        "source": "core",
+                        "timestamp": datetime.now().isoformat(),
+                    })
+        except Exception:
+            pass
+
+        # Sort by source priority (core first, then trending_1h, then trending_4h)
+        priority = {"core": 0, "trending_1h": 1, "trending_4h": 2}
+        ranked.sort(key=lambda x: priority.get(x.get("source", ""), 9))
+
+        # Keep top 10
+        ranked = ranked[:10]
+        self.last_watchlist = ranked
+
+        # Save watchlist
+        watchlist_data = {
+            "updated": datetime.now().isoformat(),
+            "tokens": ranked,
+            "count": len(ranked),
+        }
+        with open(WATCHLIST_FILE, "w") as f:
+            json.dump(watchlist_data, f, indent=2)
+
+        logger.info(f"[Scout] Found {len(ranked)} tokens: {[t['symbol'] for t in ranked]}")
+        return ranked
+
+
+# ============================================================================
+# DATA COLLECTOR AGENT
+# ============================================================================
+
+class DataCollectorAgent:
+    """Downloads and maintains historical OHLCV data."""
+
+    def __init__(self):
+        self.data_dir = DATA_DIR
+
+    async def collect(self, watchlist: List[Dict]) -> Dict:
+        """Collect data for tokens in watchlist."""
+        logger.info(f"[DataCollector] Collecting data for {len(watchlist)} tokens...")
+        summary = {"collected": [], "errors": [], "total_candles": 0}
+
+        # Import here to avoid circular
+        sys.path.insert(0, str(PROJECT_ROOT))
+        from data.historical_data import HistoricalDataManager
+        manager = HistoricalDataManager()
+
+        tokens_to_fetch = [t["symbol"] for t in watchlist if t["symbol"] in manager.TOKENS]
+
+        for token in tokens_to_fetch:
+            try:
+                df = manager.get_historical_data(token, timeframe="1h", days=30)
+                candles = len(df) if df is not None else 0
+                summary["collected"].append({
+                    "token": token,
+                    "candles": candles,
+                    "timeframe": "1h",
+                })
+                summary["total_candles"] += candles
+                logger.info(f"[DataCollector] {token}: {candles} candles (1h)")
+            except Exception as e:
+                summary["errors"].append({"token": token, "error": str(e)})
+                logger.warning(f"[DataCollector] {token} error: {e}")
+
+        logger.info(f"[DataCollector] Total: {summary['total_candles']} candles, "
+                    f"{len(summary['errors'])} errors")
+        return summary
+
+
+# ============================================================================
+# BACKTEST AGENT
+# ============================================================================
+
+class BacktestAgent:
+    """Runs backtests using Numba JIT accelerated engine."""
+
+    def __init__(self):
+        self.results_cache: List[Dict] = []
+
+    async def backtest(self, strategies: List[Dict], tokens: List[str] = None) -> List[Dict]:
+        """Backtest strategies against available data."""
+        logger.info(f"[Backtest] Testing {len(strategies)} strategies...")
+
+        from data.historical_data import HistoricalDataManager
+        from backtesting.solana_backtester import (
+            precompute_indicators, evaluate_genome_python,
+            generate_sample_data,
+        )
+
+        manager = HistoricalDataManager()
+        results = []
+
+        # Default to SOL if no tokens specified
+        test_tokens = tokens or ["SOL"]
+
+        for token in test_tokens:
+            try:
+                df = manager.get_historical_data(token, timeframe="1h", days=30)
+                if df is None or len(df) < 50:
+                    df = generate_sample_data(n_candles=720)
+                    logger.info(f"[Backtest] Using sample data for {token}")
+
+                indicators = precompute_indicators(df)
+
+                for strat in strategies:
+                    genome = self._strategy_to_genome(strat)
+                    result = evaluate_genome_python(indicators, genome, initial_balance=1.0)
+
+                    entry = {
+                        "strategy_name": strat.get("name", "Unknown"),
+                        "token": token,
+                        "pnl": result["pnl"],
+                        "trades": result["trades"],
+                        "wins": result["wins"],
+                        "losses": result["losses"],
+                        "win_rate": result["win_rate"],
+                        "candles_tested": len(df),
+                        "timestamp": datetime.now().isoformat(),
+                    }
+                    results.append(entry)
+                    logger.info(f"[Backtest] {strat.get('name','?')} on {token}: "
+                               f"PnL={result['pnl']:.4f} WR={result['win_rate']:.1%} "
+                               f"Trades={result['trades']}")
+
+            except Exception as e:
+                logger.warning(f"[Backtest] {token} error: {e}")
+
+        self.results_cache = results
+        return results
+
+    def _strategy_to_genome(self, strategy: Dict) -> np.ndarray:
+        """Convert strategy dict to genome array for backtester."""
+        genome = np.zeros(GENOME_SIZE_LOCAL, dtype=np.float64)
+
+        # Extract params from strategy (indices: 0=sl_pct, 1=tp_pct, 2=num_rules)
+        params = strategy.get("params", {})
+        genome[0] = params.get("sl_pct", 0.03)
+        genome[1] = params.get("tp_pct", 0.06)
+        genome[2] = params.get("num_rules", 1)
+
+        # Entry rule encoding
+        rules = strategy.get("entry_rules", [])
+        if rules:
+            rule = rules[0]
+            ind = rule.get("indicator", "RSI")
+            # Map indicator to index (RSI=4, SMA=10, EMA=16)
+            ind_map = {"RSI": 4, "SMA": 10, "EMA": 16, "BB": 4}
+            period_map = {10: 0, 14: 1, 20: 2, 50: 3, 100: 4, 200: 5}
+
+            period = rule.get("period", 14)
+            base_ind = ind_map.get(ind, 4)
+            period_offset = period_map.get(period, 1)
+
+            genome[3] = base_ind + period_offset  # indicator index
+            genome[4] = rule.get("threshold", 30)
+            genome[5] = 0 if rule.get("operator", "<") == ">" else 1
+
+        return genome
+
+
+# ============================================================================
+# OPTIMIZER AGENT
+# ============================================================================
+
+GENOME_SIZE_LOCAL = 18  # Local constant
+
+class OptimizerAgent:
+    """Evolves strategies using genetic algorithm."""
+
+    def __init__(self, db_path: str = DB_PATH):
+        self.db_path = db_path
+        self.population: List[Dict] = []
+        self.generation = 0
+        self.best_ever: Optional[Dict] = None
+
+        # GA parameters
+        self.pop_size = 20
+        self.elite_count = 5
+        self.mutation_rate = 0.15
+        self.crossover_rate = 0.8
+
+        # Building blocks
+        self.indicators = ["RSI", "SMA", "EMA"]
+        self.periods = [10, 14, 20, 50, 100]
+        self.rsi_thresholds = [20, 25, 30, 35, 65, 70, 75, 80]
+
+    async def optimize(self, backtest_results: List[Dict]) -> Dict:
+        """Run one generation of genetic optimization."""
+        logger.info(f"[Optimizer] Generation {self.generation}...")
+
+        from data.historical_data import HistoricalDataManager
+        from backtesting.solana_backtester import (
+            precompute_indicators, evaluate_genome_python,
+            generate_sample_data, GENOME_SIZE
+        )
+
+        # Get test data
+        manager = HistoricalDataManager()
+        try:
+            df = manager.get_historical_data("SOL", timeframe="1h", days=30)
+            if df is None or len(df) < 50:
+                raise ValueError("Insufficient data")
+        except Exception:
+            df = generate_sample_data(n_candles=720)
+
+        indicators = precompute_indicators(df)
+
+        # Initialize population if empty
+        if not self.population:
+            self.population = [self._random_strategy() for _ in range(self.pop_size)]
+
+        # Evaluate all
+        evaluated = []
+        for strat in self.population:
+            genome = self._to_genome(strat)
+            result = evaluate_genome_python(indicators, genome, initial_balance=1.0)
+            strat["fitness"] = result["pnl"]
+            strat["backtest"] = {
+                "pnl": result["pnl"],
+                "trades": result["trades"],
+                "wins": result["wins"],
+                "win_rate": result["win_rate"],
+            }
+            evaluated.append(strat)
+
+        # Sort by fitness
+        evaluated.sort(key=lambda x: x.get("fitness", -999), reverse=True)
+
+        # Track best
+        if evaluated:
+            best = evaluated[0]
+            if self.best_ever is None or best.get("fitness", -999) > self.best_ever.get("fitness", -999):
+                self.best_ever = best.copy()
+                logger.info(f"[Optimizer] New best! PnL={best['fitness']:.4f} "
+                           f"WR={best['backtest']['win_rate']:.1%}")
+
+        # Elite selection
+        elite = evaluated[:self.elite_count]
+
+        # Create next generation
+        new_pop = [s.copy() for s in elite]
+
+        while len(new_pop) < self.pop_size:
+            if random.random() < self.crossover_rate and len(elite) >= 2:
+                p1, p2 = random.sample(elite, 2)
+                child = self._crossover(p1, p2)
+            else:
+                child = self._random_strategy()
+
+            child = self._mutate(child)
+            new_pop.append(child)
+
+        self.population = new_pop
+        self.generation += 1
+
+        # Save to DB
+        self._save_generation(evaluated)
+
+        # Export top 3 as optimized
+        top3 = evaluated[:3]
+        optimized = {
+            "generation": self.generation,
+            "timestamp": datetime.now().isoformat(),
+            "strategies": top3,
+            "best_pnl": top3[0].get("fitness", 0) if top3 else 0,
+        }
+        with open(OPTIMIZED_FILE, "w") as f:
+            json.dump(optimized, f, indent=2, default=str)
+
+        logger.info(f"[Optimizer] Gen {self.generation}: Best PnL={top3[0].get('fitness', 0):.4f}, "
+                    f"Pop={len(self.population)}")
+
+        return optimized
+
+    def _random_strategy(self) -> Dict:
+        """Generate random strategy."""
+        ind = random.choice(self.indicators)
+        period = random.choice(self.periods)
+
+        if ind == "RSI":
+            threshold = random.choice(self.rsi_thresholds)
+            operator = "<" if threshold < 50 else ">"
+        else:
+            threshold = 0
+            operator = ">"
+
+        return {
+            "name": f"{ind}_{period}_{operator}{threshold}",
+            "entry_rules": [{
+                "indicator": ind,
+                "period": period,
+                "operator": operator,
+                "threshold": threshold,
+            }],
+            "params": {
+                "sl_pct": round(random.uniform(0.02, 0.08), 3),
+                "tp_pct": round(random.uniform(0.03, 0.12), 3),
+                "num_rules": 1,
+            },
+            "fitness": 0,
+        }
+
+    def _crossover(self, p1: Dict, p2: Dict) -> Dict:
+        """Crossover two strategies."""
+        child = {
+            "entry_rules": p1["entry_rules"][:] if random.random() < 0.5 else p2["entry_rules"][:],
+            "params": {},
+        }
+        # Mix params
+        for key in ["sl_pct", "tp_pct"]:
+            v1 = p1.get("params", {}).get(key, 0.05)
+            v2 = p2.get("params", {}).get(key, 0.05)
+            child["params"][key] = round((v1 + v2) / 2, 4)
+        child["params"]["num_rules"] = 1
+        child["name"] = f"cross_gen{self.generation}"
+        return child
+
+    def _mutate(self, strat: Dict) -> Dict:
+        """Mutate a strategy."""
+        if random.random() > self.mutation_rate:
+            return strat
+
+        params = strat.get("params", {})
+        if random.random() < 0.5:
+            params["sl_pct"] = round(min(0.15, max(0.01, params.get("sl_pct", 0.03) + random.uniform(-0.01, 0.01))), 4)
+        else:
+            params["tp_pct"] = round(min(0.20, max(0.02, params.get("tp_pct", 0.05) + random.uniform(-0.02, 0.02))), 4)
+
+        # Sometimes mutate indicator
+        if random.random() < 0.3 and strat.get("entry_rules"):
+            rule = strat["entry_rules"][0]
+            rule["period"] = random.choice(self.periods)
+            if rule.get("indicator") == "RSI":
+                rule["threshold"] = random.choice(self.rsi_thresholds)
+
+        strat["name"] = f"mut_gen{self.generation}"
+        return strat
+
+    def _to_genome(self, strat: Dict) -> np.ndarray:
+        """Convert strategy to genome array."""
+        genome = np.zeros(GENOME_SIZE_LOCAL, dtype=np.float64)
+        params = strat.get("params", {})
+        genome[0] = params.get("sl_pct", 0.03)
+        genome[1] = params.get("tp_pct", 0.06)
+        genome[2] = 1
+
+        rules = strat.get("entry_rules", [])
+        if rules:
+            rule = rules[0]
+            ind_map = {"RSI": 4, "SMA": 10, "EMA": 16}
+            period_map = {10: 0, 14: 1, 20: 2, 50: 3, 100: 4, 200: 5}
+            genome[3] = ind_map.get(rule.get("indicator", "RSI"), 4) + period_map.get(rule.get("period", 14), 1)
+            genome[4] = rule.get("threshold", 30)
+            genome[5] = 0 if rule.get("operator", "<") == ">" else 1
+
+        return genome
+
+    def _save_generation(self, evaluated: List[Dict]):
+        """Save generation results to SQLite."""
+        try:
+            conn = sqlite3.connect(self.db_path)
+            c = conn.cursor()
+            c.execute("""CREATE TABLE IF NOT EXISTS brain_generations (
+                id INTEGER PRIMARY KEY,
+                generation INTEGER,
+                timestamp TEXT,
+                best_pnl REAL,
+                best_strategy TEXT,
+                population_size INTEGER,
+                avg_fitness REAL
+            )""")
+
+            best = evaluated[0] if evaluated else {}
+            avg_fit = sum(s.get("fitness", 0) for s in evaluated) / max(len(evaluated), 1)
+
+            c.execute("INSERT INTO brain_generations VALUES (NULL, ?, ?, ?, ?, ?, ?)",
+                      (self.generation, datetime.now().isoformat(),
+                       best.get("fitness", 0), json.dumps(best, default=str),
+                       len(evaluated), avg_fit))
+            conn.commit()
+            conn.close()
+        except Exception as e:
+            logger.warning(f"[Optimizer] DB save error: {e}")
+
+
+# ============================================================================
+# LEARNING AGENT
+# ============================================================================
+
+class LearningAgent:
+    """Analyzes performance and builds knowledge base."""
+
+    def __init__(self):
+        self.knowledge: Dict = self._load_knowledge()
+
+    def _load_knowledge(self) -> Dict:
+        """Load existing knowledge."""
+        perf_file = KNOWLEDGE_DIR / "strategy_performance.json"
+        if perf_file.exists():
+            try:
+                return json.loads(perf_file.read_text())
+            except Exception:
+                pass
+        return {
+            "strategies": {},
+            "market_patterns": [],
+            "lessons": [],
+            "last_updated": None,
+        }
+
+    async def learn(self, backtest_results: List[Dict], optimizer_results: Dict) -> Dict:
+        """Analyze results and update knowledge base."""
+        logger.info("[Learning] Analyzing performance...")
+
+        # Track strategy performance over time
+        for result in backtest_results:
+            name = result.get("strategy_name", "unknown")
+            if name not in self.knowledge["strategies"]:
+                self.knowledge["strategies"][name] = {
+                    "total_tests": 0,
+                    "total_pnl": 0,
+                    "avg_pnl": 0,
+                    "best_pnl": float("-inf"),
+                    "worst_pnl": float("inf"),
+                    "avg_win_rate": 0,
+                    "history": [],
+                }
+
+            stats = self.knowledge["strategies"][name]
+            stats["total_tests"] += 1
+            pnl = result.get("pnl", 0)
+            stats["total_pnl"] += pnl
+            stats["avg_pnl"] = stats["total_pnl"] / stats["total_tests"]
+            stats["best_pnl"] = max(stats["best_pnl"], pnl)
+            stats["worst_pnl"] = min(stats["worst_pnl"], pnl)
+
+            # Rolling average win rate
+            wr = result.get("win_rate", 0)
+            n = stats["total_tests"]
+            stats["avg_win_rate"] = ((stats["avg_win_rate"] * (n - 1)) + wr) / n
+
+            stats["history"].append({
+                "pnl": pnl,
+                "win_rate": wr,
+                "trades": result.get("trades", 0),
+                "token": result.get("token", "?"),
+                "timestamp": result.get("timestamp", ""),
+            })
+            # Keep last 50 history entries
+            stats["history"] = stats["history"][-50:]
+
+        # Analyze optimizer progress
+        if optimizer_results:
+            gen = optimizer_results.get("generation", 0)
+            best_pnl = optimizer_results.get("best_pnl", 0)
+            self.knowledge["market_patterns"].append({
+                "generation": gen,
+                "best_pnl": best_pnl,
+                "timestamp": datetime.now().isoformat(),
+            })
+            # Keep last 100
+            self.knowledge["market_patterns"] = self.knowledge["market_patterns"][-100:]
+
+        # Generate lessons
+        self._generate_lessons()
+
+        # Save knowledge
+        self.knowledge["last_updated"] = datetime.now().isoformat()
+        self._save_knowledge()
+
+        logger.info(f"[Learning] Tracked {len(self.knowledge['strategies'])} strategies, "
+                    f"{len(self.knowledge['lessons'])} lessons")
+        return self.knowledge
+
+    def _generate_lessons(self):
+        """Extract lessons from accumulated data."""
+        lessons = []
+
+        for name, stats in self.knowledge["strategies"].items():
+            if stats["total_tests"] >= 3:
+                if stats["avg_pnl"] > 0.01:
+                    lessons.append(f"Strategy '{name}' is consistently profitable "
+                                   f"(avg PnL: {stats['avg_pnl']:.4f})")
+                elif stats["avg_pnl"] < -0.01:
+                    lessons.append(f"Strategy '{name}' is consistently losing "
+                                   f"(avg PnL: {stats['avg_pnl']:.4f}) - consider removing")
+
+                if stats["avg_win_rate"] > 0.6:
+                    lessons.append(f"Strategy '{name}' has high win rate ({stats['avg_win_rate']:.0%})")
+
+        # Check optimizer progress
+        patterns = self.knowledge.get("market_patterns", [])
+        if len(patterns) >= 3:
+            recent = [p["best_pnl"] for p in patterns[-5:]]
+            if all(recent[i] >= recent[i - 1] for i in range(1, len(recent))):
+                lessons.append("Optimizer is steadily improving - keep running")
+            elif len(recent) >= 3 and recent[-1] < recent[-3]:
+                lessons.append("Optimizer may be stuck - consider resetting population")
+
+        self.knowledge["lessons"] = lessons[-20:]
+
+    def _save_knowledge(self):
+        """Save knowledge to files."""
+        # JSON data
+        perf_file = KNOWLEDGE_DIR / "strategy_performance.json"
+        with open(perf_file, "w") as f:
+            json.dump(self.knowledge, f, indent=2, default=str)
+
+        # Human-readable lessons
+        lessons_file = KNOWLEDGE_DIR / "lessons_learned.md"
+        lines = [
+            f"# Trading Lessons Learned",
+            f"*Updated: {datetime.now().strftime('%Y-%m-%d %H:%M')}*\n",
+            f"## Strategy Performance\n",
+        ]
+
+        for name, stats in self.knowledge["strategies"].items():
+            emoji = "+" if stats["avg_pnl"] > 0 else "-"
+            lines.append(f"- **{name}**: PnL={stats['avg_pnl']:.4f} "
+                        f"WR={stats['avg_win_rate']:.0%} "
+                        f"Tests={stats['total_tests']}")
+
+        lines.append(f"\n## Lessons\n")
+        for lesson in self.knowledge.get("lessons", []):
+            lines.append(f"- {lesson}")
+
+        lessons_file.write_text("\n".join(lines))
+
+
+# ============================================================================
+# DEPLOYMENT AGENT
+# ============================================================================
+
+class DeploymentAgent:
+    """Deploys winning strategies to live trading."""
+
+    def __init__(self):
+        self.deployed: List[Dict] = []
+        self.deploy_history: List[Dict] = []
+
+    async def deploy(self, optimized: Dict, knowledge: Dict) -> Dict:
+        """Evaluate and deploy winning strategies."""
+        logger.info("[Deploy] Evaluating candidates for deployment...")
+
+        candidates = optimized.get("strategies", [])
+        if not candidates:
+            logger.info("[Deploy] No candidates available")
+            return {"deployed": 0, "reason": "No candidates"}
+
+        approved = []
+        for strat in candidates:
+            bt = strat.get("backtest", {})
+            pnl = bt.get("pnl", strat.get("fitness", -1))
+            win_rate = bt.get("win_rate", 0)
+            trades = bt.get("trades", 0)
+
+            # Deployment criteria
+            reasons = []
+            if pnl <= 0:
+                reasons.append(f"Negative PnL ({pnl:.4f})")
+            if win_rate < 0.4:
+                reasons.append(f"Low win rate ({win_rate:.0%})")
+            if trades < 1:
+                reasons.append(f"No trades generated")
+
+            if not reasons:
+                # Convert to format agent_runner.py understands
+                deployed_strat = self._format_for_runner(strat)
+                approved.append(deployed_strat)
+                logger.info(f"[Deploy] Approved: {strat.get('name', '?')} "
+                           f"PnL={pnl:.4f} WR={win_rate:.0%}")
+            else:
+                logger.info(f"[Deploy] Rejected {strat.get('name', '?')}: {', '.join(reasons)}")
+
+        # Keep max 3 active strategies
+        approved = approved[:3]
+
+        if approved:
+            # Write for agent_runner.py to consume
+            deploy_data = {
+                "deployed_at": datetime.now().isoformat(),
+                "generation": optimized.get("generation", 0),
+                "strategies": approved,
+                "count": len(approved),
+            }
+            with open(ACTIVE_STRATEGIES_FILE, "w") as f:
+                json.dump(deploy_data, f, indent=2, default=str)
+
+            self.deployed = approved
+            self.deploy_history.append({
+                "time": datetime.now().isoformat(),
+                "count": len(approved),
+                "names": [s.get("name", "?") for s in approved],
+            })
+
+            logger.info(f"[Deploy] Deployed {len(approved)} strategies to live trading")
+        else:
+            logger.info("[Deploy] No strategies passed deployment criteria")
+
+        return {"deployed": len(approved), "strategies": approved}
+
+    def _format_for_runner(self, strat: Dict) -> Dict:
+        """Format strategy for agent_runner.py's StrategyAgent."""
+        params = strat.get("params", {})
+        rules = strat.get("entry_rules", [{}])
+        rule = rules[0] if rules else {}
+
+        return {
+            "name": strat.get("name", f"Brain_Gen{strat.get('generation', '?')}"),
+            "description": f"Auto-evolved: {rule.get('indicator', 'RSI')} "
+                          f"{rule.get('operator', '<')}{rule.get('threshold', 30)} "
+                          f"P{rule.get('period', 14)} "
+                          f"SL={params.get('sl_pct', 0.03)*100:.1f}% "
+                          f"TP={params.get('tp_pct', 0.06)*100:.1f}%",
+            "buy_threshold": -params.get("sl_pct", 0.03),
+            "sell_threshold": params.get("tp_pct", 0.06),
+            "lookback": rule.get("period", 14),
+            "score": int(strat.get("fitness", 0) * 10000),
+            "trades": strat.get("backtest", {}).get("trades", 0),
+            "wins": strat.get("backtest", {}).get("wins", 0),
+            # Keep original for reference
+            "brain_params": params,
+            "brain_rules": rules,
+        }
+
+
+# ============================================================================
+# BRAIN COORDINATOR
+# ============================================================================
+
+class BrainCoordinator:
+    """Orchestrates all brain agents in continuous loop."""
+
+    def __init__(self, interval: int = 300):
+        self.interval = interval  # Base cycle in seconds (5 min)
+        self.running = False
+        self.cycle = 0
+        self.start_time = None
+
+        self.jupiter = JupiterClient()
+        self.scout = TokenScoutAgent(self.jupiter)
+        self.collector = DataCollectorAgent()
+        self.backtester = BacktestAgent()
+        self.optimizer = OptimizerAgent()
+        self.learner = LearningAgent()
+        self.deployer = DeploymentAgent()
+
+        self.last_results: Dict = {}
+
+    async def run_cycle(self) -> Dict:
+        """Run one brain cycle."""
+        self.cycle += 1
+        cycle_result = {
+            "cycle": self.cycle,
+            "time": datetime.now().isoformat(),
+            "agents": {},
+        }
+
+        # 1. Scout (every cycle)
+        try:
+            watchlist = await self.scout.scout()
+            cycle_result["agents"]["scout"] = {
+                "status": "ok",
+                "tokens": len(watchlist),
+                "names": [t["symbol"] for t in watchlist[:5]],
+            }
+        except Exception as e:
+            logger.error(f"[Brain] Scout error: {e}")
+            watchlist = self.scout.last_watchlist or []
+            cycle_result["agents"]["scout"] = {"status": "error", "error": str(e)}
+
+        # 2. Data collection (every 3 cycles = ~15 min)
+        if self.cycle % 3 == 1 or self.cycle == 1:
+            try:
+                data_summary = await self.collector.collect(watchlist)
+                cycle_result["agents"]["data_collector"] = {
+                    "status": "ok",
+                    "candles": data_summary.get("total_candles", 0),
+                }
+            except Exception as e:
+                logger.error(f"[Brain] DataCollector error: {e}")
+                cycle_result["agents"]["data_collector"] = {"status": "error", "error": str(e)}
+
+        # 3. Backtest (every 2 cycles = ~10 min)
+        backtest_results = []
+        if self.cycle % 2 == 0 or self.cycle == 1:
+            try:
+                # Test current strategies
+                strategies = self.optimizer.population[:5] if self.optimizer.population else [
+                    self.optimizer._random_strategy() for _ in range(3)
+                ]
+                backtest_results = await self.backtester.backtest(strategies)
+                cycle_result["agents"]["backtester"] = {
+                    "status": "ok",
+                    "tested": len(backtest_results),
+                    "best_pnl": max((r.get("pnl", 0) for r in backtest_results), default=0),
+                }
+            except Exception as e:
+                logger.error(f"[Brain] Backtest error: {e}")
+                cycle_result["agents"]["backtester"] = {"status": "error", "error": str(e)}
+
+        # 4. Optimizer (every 6 cycles = ~30 min)
+        optimizer_results = {}
+        if self.cycle % 6 == 0 or self.cycle == 1:
+            try:
+                optimizer_results = await self.optimizer.optimize(backtest_results)
+                cycle_result["agents"]["optimizer"] = {
+                    "status": "ok",
+                    "generation": optimizer_results.get("generation", 0),
+                    "best_pnl": optimizer_results.get("best_pnl", 0),
+                }
+            except Exception as e:
+                logger.error(f"[Brain] Optimizer error: {e}")
+                cycle_result["agents"]["optimizer"] = {"status": "error", "error": str(e)}
+
+        # 5. Learning (every 3 cycles = ~15 min)
+        knowledge = {}
+        if self.cycle % 3 == 0 or self.cycle == 1:
+            try:
+                knowledge = await self.learner.learn(backtest_results, optimizer_results)
+                cycle_result["agents"]["learner"] = {
+                    "status": "ok",
+                    "strategies_tracked": len(knowledge.get("strategies", {})),
+                    "lessons": len(knowledge.get("lessons", [])),
+                }
+            except Exception as e:
+                logger.error(f"[Brain] Learning error: {e}")
+                cycle_result["agents"]["learner"] = {"status": "error", "error": str(e)}
+
+        # 6. Deployment (every 2 cycles = ~10 min, but only if optimizer ran)
+        if (self.cycle % 2 == 0 or self.cycle == 1) and OPTIMIZED_FILE.exists():
+            try:
+                opt_data = json.loads(OPTIMIZED_FILE.read_text())
+                deploy_result = await self.deployer.deploy(opt_data, knowledge)
+                cycle_result["agents"]["deployer"] = {
+                    "status": "ok",
+                    "deployed": deploy_result.get("deployed", 0),
+                }
+            except Exception as e:
+                logger.error(f"[Brain] Deploy error: {e}")
+                cycle_result["agents"]["deployer"] = {"status": "error", "error": str(e)}
+
+        self.last_results = cycle_result
+        self._write_state()
+        return cycle_result
+
+    async def run(self):
+        """Main continuous loop."""
+        self.running = True
+        self.start_time = datetime.now()
+
+        print("=" * 70)
+        print("  AGENT BRAIN - SELF-IMPROVING STRATEGY SYSTEM")
+        print("=" * 70)
+        print(f"  Base Interval: {self.interval}s")
+        print(f"  Started: {self.start_time.strftime('%Y-%m-%d %H:%M:%S')}")
+        print()
+        print("  Agents:")
+        print("    TokenScout     - Token scanning (every cycle)")
+        print("    DataCollector  - Historical data (every 3 cycles)")
+        print("    Backtester     - Strategy testing (every 2 cycles)")
+        print("    Optimizer      - GA evolution (every 6 cycles)")
+        print("    Learner        - Knowledge building (every 3 cycles)")
+        print("    Deployer       - Strategy deployment (every 2 cycles)")
+        print("=" * 70)
+
+        while self.running:
+            try:
+                result = await self.run_cycle()
+                active = [k for k, v in result.get("agents", {}).items() if v.get("status") == "ok"]
+                print(f"\n--- Brain Cycle {result['cycle']} | "
+                      f"Active: {', '.join(active)} | "
+                      f"Gen: {self.optimizer.generation} | "
+                      f"Best: {self.optimizer.best_ever.get('fitness', 0):.4f} ---" if self.optimizer.best_ever else "Best: N/A ---")
+
+            except Exception as e:
+                logger.error(f"Brain cycle error: {e}")
+                print(f"\n  ERROR in brain cycle {self.cycle}: {e}")
+
+            for i in range(self.interval):
+                if not self.running:
+                    break
+                await asyncio.sleep(1)
+
+        await self.jupiter.close()
+        print("\nBrain stopped.")
+
+    def _write_state(self):
+        """Write brain state for dashboard."""
+        state = {
+            "running": self.running,
+            "cycle": self.cycle,
+            "start_time": self.start_time.isoformat() if self.start_time else None,
+            "last_update": datetime.now().isoformat(),
+            "interval": self.interval,
+            "optimizer": {
+                "generation": self.optimizer.generation,
+                "population_size": len(self.optimizer.population),
+                "best_ever": self.optimizer.best_ever.get("fitness", 0) if self.optimizer.best_ever else None,
+                "best_strategy": self.optimizer.best_ever.get("name", "None") if self.optimizer.best_ever else "None",
+            },
+            "scout": {
+                "watchlist": [t["symbol"] for t in self.scout.last_watchlist[:5]],
+            },
+            "deployer": {
+                "deployed_count": len(self.deployer.deployed),
+                "history": self.deployer.deploy_history[-10:],
+            },
+            "learner": {
+                "strategies_tracked": len(self.learner.knowledge.get("strategies", {})),
+                "lessons_count": len(self.learner.knowledge.get("lessons", [])),
+                "lessons": self.learner.knowledge.get("lessons", [])[:5],
+            },
+            "last_cycle": self.last_results,
+        }
+        with open(BRAIN_STATE_FILE, "w") as f:
+            json.dump(state, f, indent=2, default=str)
+
+    def stop(self):
+        self.running = False
+
+
+# ============================================================================
+# MAIN
+# ============================================================================
+
+def main():
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Agent Brain - Strategy Discovery")
+    parser.add_argument("--interval", type=int, default=300, help="Base cycle interval in seconds (default: 300)")
+    parser.add_argument("--fast", action="store_true", help="Fast mode (120s cycles)")
+    args = parser.parse_args()
+
+    interval = 120 if args.fast else args.interval
+
+    coordinator = BrainCoordinator(interval=interval)
+
+    def signal_handler(sig, frame):
+        print("\nStopping brain...")
+        coordinator.stop()
+
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+
+    asyncio.run(coordinator.run())
+
+
+if __name__ == "__main__":
+    main()

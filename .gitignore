@@ -6,7 +6,18 @@
 # Secrets
 *.pem
 *.key
-*.json (excepto templates)
+.env.backup
+.env.save
+
+# State files (runtime generated)
+agent_state.json
+brain_state.json
+data/active_strategies.json
+data/optimized_strategies.json
+data/token_watchlist.json
+data/knowledge/
+data/*.csv
+data/*.db
 
 # IDE
 .vscode/
