@@ -59,6 +59,18 @@ DB_PATH = str(DATA_DIR / "genetic_results.db")
 DATA_DIR.mkdir(exist_ok=True)
 KNOWLEDGE_DIR.mkdir(exist_ok=True)
 
+# ============================================================================
+# PROFIT TARGETS - Brain optimizes strategies to hit these
+# ============================================================================
+PROFIT_TARGETS = {
+    "daily_min_pct": 5.0,        # 5% daily minimum
+    "weekly_target_pct": 100.0,  # Double every week (ideal)
+    "monthly_min_pct": 100.0,    # Double every month (minimum)
+    "min_backtest_pnl": 0.05,    # 5% PnL in backtest to deploy
+    "min_trades_backtest": 5,    # Enough trades to be statistically meaningful
+    "min_win_rate": 0.45,        # 45% win rate with good R:R
+}
+
 
 # ============================================================================
 # TOKEN SCOUT AGENT
@@ -334,10 +346,10 @@ class OptimizerAgent:
         self.mutation_rate = 0.15
         self.crossover_rate = 0.8
 
-        # Building blocks
+        # Building blocks - wider ranges for aggressive trading
         self.indicators = ["RSI", "SMA", "EMA"]
-        self.periods = [10, 14, 20, 50, 100]
-        self.rsi_thresholds = [20, 25, 30, 35, 65, 70, 75, 80]
+        self.periods = [5, 10, 14, 20, 50, 100]  # Added fast period 5
+        self.rsi_thresholds = [15, 20, 25, 30, 35, 40, 60, 65, 70, 75, 80, 85]  # Wider range
 
     async def optimize(self, backtest_results: List[Dict]) -> Dict:
         """Run one generation of genetic optimization."""
@@ -364,17 +376,37 @@ class OptimizerAgent:
         if not self.population:
             self.population = [self._random_strategy() for _ in range(self.pop_size)]
 
-        # Evaluate all
+        # Evaluate all - fitness rewards high returns AND trade frequency
+        # Target: strategies that can deliver 5%+ daily
         evaluated = []
         for strat in self.population:
             genome = self._to_genome(strat)
             result = evaluate_genome_python(indicators, genome, initial_balance=1.0)
-            strat["fitness"] = result["pnl"]
+
+            # Composite fitness: PnL * frequency bonus * win rate bonus
+            pnl = result["pnl"]
+            trades = result["trades"]
+            win_rate = result["win_rate"]
+
+            # Bonus for strategies that trade frequently (need many trades for 5%/day)
+            freq_bonus = min(trades / 10.0, 2.0) if trades > 0 else 0.1
+            # Bonus for decent win rate (above 45%)
+            wr_bonus = 1.0 + max(0, (win_rate - 0.45)) * 2.0
+            # Penalty for strategies that don't trade
+            if trades < PROFIT_TARGETS["min_trades_backtest"]:
+                freq_bonus *= 0.3
+
+            fitness = pnl * freq_bonus * wr_bonus
+
+            strat["fitness"] = fitness
             strat["backtest"] = {
                 "pnl": result["pnl"],
                 "trades": result["trades"],
                 "wins": result["wins"],
                 "win_rate": result["win_rate"],
+                "raw_pnl": pnl,
+                "freq_bonus": round(freq_bonus, 2),
+                "wr_bonus": round(wr_bonus, 2),
             }
             evaluated.append(strat)
 
@@ -448,8 +480,8 @@ class OptimizerAgent:
                 "threshold": threshold,
             }],
             "params": {
-                "sl_pct": round(random.uniform(0.02, 0.08), 3),
-                "tp_pct": round(random.uniform(0.03, 0.12), 3),
+                "sl_pct": round(random.uniform(0.01, 0.05), 3),  # Tight stops (1-5%)
+                "tp_pct": round(random.uniform(0.02, 0.15), 3),  # Wide targets (2-15%)
                 "num_rules": 1,
             },
             "fitness": 0,
@@ -479,9 +511,11 @@ class OptimizerAgent:
 
         params = strat.get("params", {})
         if random.random() < 0.5:
-            params["sl_pct"] = round(min(0.15, max(0.01, params.get("sl_pct", 0.03) + random.uniform(-0.01, 0.01))), 4)
+            # Tight stops: 0.5% - 5% (aggressive risk management)
+            params["sl_pct"] = round(min(0.05, max(0.005, params.get("sl_pct", 0.02) + random.uniform(-0.01, 0.01))), 4)
         else:
-            params["tp_pct"] = round(min(0.20, max(0.02, params.get("tp_pct", 0.05) + random.uniform(-0.02, 0.02))), 4)
+            # Wide targets: 1% - 20% (let winners run for 5%+ daily)
+            params["tp_pct"] = round(min(0.20, max(0.01, params.get("tp_pct", 0.05) + random.uniform(-0.03, 0.03))), 4)
 
         # Sometimes mutate indicator
         if random.random() < 0.3 and strat.get("entry_rules"):
@@ -629,29 +663,36 @@ class LearningAgent:
         return self.knowledge
 
     def _generate_lessons(self):
-        """Extract lessons from accumulated data."""
+        """Extract lessons from accumulated data.
+
+        Evaluates against PROFIT_TARGETS: 5%+ daily, 2x monthly.
+        """
         lessons = []
+        target_daily = PROFIT_TARGETS["daily_min_pct"] / 100.0  # 0.05
 
         for name, stats in self.knowledge["strategies"].items():
             if stats["total_tests"] >= 3:
-                if stats["avg_pnl"] > 0.01:
-                    lessons.append(f"Strategy '{name}' is consistently profitable "
+                if stats["avg_pnl"] >= target_daily:
+                    lessons.append(f"STRONG: '{name}' hits daily target "
+                                   f"(avg PnL: {stats['avg_pnl']:.4f} >= {target_daily:.2f})")
+                elif stats["avg_pnl"] > 0.01:
+                    lessons.append(f"OK: '{name}' profitable but below 5% target "
                                    f"(avg PnL: {stats['avg_pnl']:.4f})")
                 elif stats["avg_pnl"] < -0.01:
-                    lessons.append(f"Strategy '{name}' is consistently losing "
-                                   f"(avg PnL: {stats['avg_pnl']:.4f}) - consider removing")
+                    lessons.append(f"DROP: '{name}' losing money "
+                                   f"(avg PnL: {stats['avg_pnl']:.4f}) - remove")
 
                 if stats["avg_win_rate"] > 0.6:
-                    lessons.append(f"Strategy '{name}' has high win rate ({stats['avg_win_rate']:.0%})")
+                    lessons.append(f"HIGH WR: '{name}' ({stats['avg_win_rate']:.0%})")
 
         # Check optimizer progress
         patterns = self.knowledge.get("market_patterns", [])
         if len(patterns) >= 3:
             recent = [p["best_pnl"] for p in patterns[-5:]]
             if all(recent[i] >= recent[i - 1] for i in range(1, len(recent))):
-                lessons.append("Optimizer is steadily improving - keep running")
+                lessons.append("Optimizer improving - evolving toward 5%+ daily target")
             elif len(recent) >= 3 and recent[-1] < recent[-3]:
-                lessons.append("Optimizer may be stuck - consider resetting population")
+                lessons.append("Optimizer stalled - may need population reset for 5%+ target")
 
         self.knowledge["lessons"] = lessons[-20:]
 
@@ -695,7 +736,13 @@ class DeploymentAgent:
         self.deploy_history: List[Dict] = []
 
     async def deploy(self, optimized: Dict, knowledge: Dict) -> Dict:
-        """Evaluate and deploy winning strategies."""
+        """Evaluate and deploy winning strategies.
+
+        Deployment criteria aligned with PROFIT_TARGETS:
+        - PnL must be positive (>5% preferred)
+        - Win rate >= 45% (with good R:R ratio)
+        - Must generate enough trades (frequency matters for 5%/day target)
+        """
         logger.info("[Deploy] Evaluating candidates for deployment...")
 
         candidates = optimized.get("strategies", [])
@@ -706,18 +753,18 @@ class DeploymentAgent:
         approved = []
         for strat in candidates:
             bt = strat.get("backtest", {})
-            pnl = bt.get("pnl", strat.get("fitness", -1))
+            pnl = bt.get("pnl", bt.get("raw_pnl", strat.get("fitness", -1)))
             win_rate = bt.get("win_rate", 0)
             trades = bt.get("trades", 0)
 
-            # Deployment criteria
+            # Deployment criteria - aggressive but filtered
             reasons = []
             if pnl <= 0:
                 reasons.append(f"Negative PnL ({pnl:.4f})")
-            if win_rate < 0.4:
+            if win_rate < PROFIT_TARGETS["min_win_rate"]:
                 reasons.append(f"Low win rate ({win_rate:.0%})")
-            if trades < 1:
-                reasons.append(f"No trades generated")
+            if trades < PROFIT_TARGETS["min_trades_backtest"]:
+                reasons.append(f"Too few trades ({trades}, need {PROFIT_TARGETS['min_trades_backtest']}+)")
 
             if not reasons:
                 # Convert to format agent_runner.py understands
@@ -1132,10 +1179,18 @@ class BrainCoordinator:
         self.start_time = datetime.now()
 
         print("=" * 70)
-        print("  AGENT BRAIN - SELF-IMPROVING STRATEGY SYSTEM")
+        print("  AGENT BRAIN - AGGRESSIVE STRATEGY DISCOVERY")
         print("=" * 70)
         print(f"  Base Interval: {self.interval}s")
         print(f"  Started: {self.start_time.strftime('%Y-%m-%d %H:%M:%S')}")
+        print()
+        print(f"  PROFIT TARGETS:")
+        print(f"    Daily min:    {PROFIT_TARGETS['daily_min_pct']}%")
+        print(f"    Weekly goal:  2x (100%)")
+        print(f"    Monthly min:  2x (100%)")
+        print(f"    Deploy if:    PnL>{PROFIT_TARGETS['min_backtest_pnl']:.0%} "
+              f"WR>{PROFIT_TARGETS['min_win_rate']:.0%} "
+              f"Trades>{PROFIT_TARGETS['min_trades_backtest']}")
         print()
         print("  Agents:")
         print("    TokenScout     - Token scanning (every cycle)")

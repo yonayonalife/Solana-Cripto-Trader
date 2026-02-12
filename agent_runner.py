@@ -41,6 +41,19 @@ logging.basicConfig(
 logger = logging.getLogger("agent_runner")
 
 # ============================================================================
+# PROFIT TARGETS - Minimum 5% daily / 2x monthly / ideally 2x weekly
+# ============================================================================
+PROFIT_TARGETS = {
+    "daily_min_pct": 5.0,       # Minimum 5% daily return
+    "weekly_target_pct": 100.0, # Ideal: double every week
+    "monthly_min_pct": 100.0,   # Minimum: double every month
+    "per_trade_target_pct": 1.0,  # Average 1% per trade
+    "min_trades_per_day": 10,   # Need frequent trading for compounding
+    "max_position_pct": 0.30,   # Up to 30% of portfolio per trade (aggressive)
+    "min_position_pct": 0.10,   # Minimum 10% per trade (no tiny trades)
+}
+
+# ============================================================================
 # AGENT DEFINITIONS
 # ============================================================================
 
@@ -77,54 +90,91 @@ class AnalysisAgent:
         }
 
     def _generate_signal(self, current_price: float) -> str:
+        """Generate signal with tight thresholds for aggressive trading.
+
+        Targets 5%+ daily - needs to catch small moves frequently.
+        """
         if len(self.price_history) < 3:
             return "WAIT"
         prices = [p["price"] for p in self.price_history[-10:]]
         avg = sum(prices) / len(prices)
-        if current_price < avg * 0.98:
+        # Tight thresholds: catch 0.5% moves (not 2%)
+        if current_price < avg * 0.995:
             return "BUY"
-        elif current_price > avg * 1.02:
+        elif current_price > avg * 1.005:
             return "SELL"
         return "HOLD"
 
     def _confidence(self) -> float:
-        if len(self.price_history) < 5:
+        """Confidence ramps up faster for aggressive trading."""
+        if len(self.price_history) < 3:
             return 0.3
-        elif len(self.price_history) < 20:
+        elif len(self.price_history) < 5:
             return 0.5
-        return 0.7
+        elif len(self.price_history) < 10:
+            return 0.65
+        return 0.8
 
 
 class RiskAgent:
-    """Validates trades against risk limits."""
+    """Validates trades against risk limits.
 
-    def __init__(self, max_position_pct: float = 0.10, daily_loss_pct: float = 0.10):
-        self.max_position_pct = max_position_pct
-        self.daily_loss_pct = daily_loss_pct
+    Targets: 5%+ daily returns, 2x monthly minimum.
+    Uses aggressive position sizing (10-30% per trade) to hit targets.
+    """
+
+    def __init__(self):
+        self.max_position_pct = PROFIT_TARGETS["max_position_pct"]  # 30%
+        self.min_position_pct = PROFIT_TARGETS["min_position_pct"]  # 10%
+        self.daily_loss_limit = 0.15  # Stop trading if down 15% in a day
         self.daily_pnl = 0.0
+        self.daily_pnl_pct = 0.0
+        self.starting_balance = 0.0
         self.last_reset = datetime.now().date()
         self.trades_today = 0
-        self.max_trades_day = 20
+        self.max_trades_day = 50  # Allow many trades for compounding
+        self.daily_target_pct = PROFIT_TARGETS["daily_min_pct"]
 
     def validate(self, trade: Dict, portfolio_sol: float) -> Dict:
         today = datetime.now().date()
         if today != self.last_reset:
             self.daily_pnl = 0.0
+            self.daily_pnl_pct = 0.0
             self.trades_today = 0
             self.last_reset = today
+            self.starting_balance = portfolio_sol
+
+        if self.starting_balance == 0:
+            self.starting_balance = portfolio_sol
 
         amount = trade.get("amount", 0)
         max_allowed = portfolio_sol * self.max_position_pct
+        min_allowed = portfolio_sol * self.min_position_pct
 
         if amount > max_allowed:
-            return {"approved": False, "reason": f"Amount {amount} exceeds max {max_allowed:.4f} SOL"}
+            return {"approved": False, "reason": f"Amount {amount} exceeds max {max_allowed:.4f} SOL (30%)"}
         if amount < 0.001:
             return {"approved": False, "reason": "Amount too small (min 0.001 SOL)"}
         if self.trades_today >= self.max_trades_day:
             return {"approved": False, "reason": f"Max {self.max_trades_day} trades/day reached"}
+        if self.daily_pnl_pct < -self.daily_loss_limit:
+            return {"approved": False, "reason": f"Daily loss limit hit ({self.daily_pnl_pct:.1%})"}
 
         self.trades_today += 1
-        return {"approved": True, "reason": "Within limits", "max_allowed": max_allowed}
+        target_progress = (self.daily_pnl_pct / self.daily_target_pct * 100) if self.daily_target_pct else 0
+        return {
+            "approved": True,
+            "reason": f"OK | Day: {self.daily_pnl_pct:+.1%} (target: {self.daily_target_pct}%)",
+            "max_allowed": max_allowed,
+            "min_position": min_allowed,
+            "target_progress": target_progress,
+        }
+
+    def record_trade_pnl(self, pnl_sol: float):
+        """Record PnL from a completed trade."""
+        self.daily_pnl += pnl_sol
+        if self.starting_balance > 0:
+            self.daily_pnl_pct = self.daily_pnl / self.starting_balance
 
 
 class TradingAgent:
@@ -337,7 +387,7 @@ class StrategyAgent:
             if len(self._price_window) > self._max_window:
                 self._price_window = self._price_window[-self._max_window:]
 
-        if confidence < 0.4:
+        if confidence < 0.3:
             return {"action": "WAIT", "reason": "Low confidence", "strategy": self.active_strategy["name"]}
 
         # Determine signal: use brain rules if available, else fallback to mean-reversion
@@ -349,15 +399,17 @@ class StrategyAgent:
 
         # Also check for SELL signal using mean-reversion when in brain mode
         if signal == "HOLD" and brain_rules:
-            # Use sell_threshold from active strategy for profit-taking
-            sell_threshold = self.active_strategy.get("sell_threshold", 0.02)
+            # Tight sell threshold for frequent profit-taking (target 5%+ daily)
+            sell_threshold = self.active_strategy.get("sell_threshold", 0.005)
             if len(self._price_window) >= 10:
                 avg = sum(self._price_window[-10:]) / 10
                 if price > avg * (1 + sell_threshold):
                     signal = "SELL"
 
         if signal == "BUY":
-            # Use accumulation target to decide WHAT to buy
+            # Dynamic position sizing: 15-25% of estimated portfolio
+            # Target: 5%+ daily via multiple trades with meaningful size
+            position_pct = 0.20  # 20% of portfolio per trade
             accum = analysis.get("accumulation", {})
             rec = accum.get("recommendation", "SOL")
             sol_pct = accum.get("SOL", 0.6)
@@ -370,7 +422,7 @@ class StrategyAgent:
                     "token_to": "cbBTC",
                     "token_from_mint": SOL,
                     "token_to_mint": "cbbtcf3aa214zXHbiAZQwf4122FBYbraNdFqgw4iMij",
-                    "amount_sol": 0.05,
+                    "position_pct": position_pct,
                     "reason": f"Brain:{self.active_strategy['name']} @ ${price:.2f} | BTC ({btc_pct:.0%})",
                     "strategy": self.active_strategy["name"],
                     "accumulation": rec,
@@ -382,7 +434,7 @@ class StrategyAgent:
                     "token_to": "SOL",
                     "token_from_mint": USDC,
                     "token_to_mint": SOL,
-                    "amount_sol": 0.05,
+                    "position_pct": position_pct,
                     "reason": f"Brain:{self.active_strategy['name']} @ ${price:.2f} | SOL ({sol_pct:.0%})",
                     "strategy": self.active_strategy["name"],
                     "accumulation": rec,
@@ -394,7 +446,7 @@ class StrategyAgent:
                 "token_to": "USDC",
                 "token_from_mint": SOL,
                 "token_to_mint": USDC,
-                "amount_sol": 0.05,
+                "position_pct": 0.20,
                 "reason": f"Signal: {signal} @ ${price:.2f}",
                 "strategy": self.active_strategy["name"]
             }
@@ -482,8 +534,6 @@ class AgentCoordinator:
 
         # 3. If action needed, validate with risk
         if action in ("BUY", "SELL"):
-            amount = decision.get("amount_sol", 0.05)
-
             # Get current balance (async, persistent client)
             from solana.rpc.async_api import AsyncClient
             from solders.pubkey import Pubkey
@@ -492,7 +542,11 @@ class AgentCoordinator:
             balance_resp = await self.sol_client.get_balance(Pubkey.from_string(self.wallet))
             sol_balance = balance_resp.value / 1e9
 
-            self._log("Risk", "Validating", f"{action} {amount} SOL (balance: {sol_balance:.4f})")
+            # Dynamic position sizing: use percentage of balance (target 5%+ daily)
+            position_pct = decision.get("position_pct", 0.20)
+            amount = max(sol_balance * position_pct, 0.01)  # At least 0.01 SOL
+
+            self._log("Risk", "Validating", f"{action} {amount:.4f} SOL ({position_pct:.0%} of {sol_balance:.4f})")
             risk_check = self.risk.validate({"amount": amount}, sol_balance)
 
             if risk_check["approved"]:
@@ -556,7 +610,7 @@ class AgentCoordinator:
         self.start_time = datetime.now()
 
         print("=" * 70)
-        print("  MULTI-AGENT TRADING SYSTEM - ACTIVE")
+        print("  MULTI-AGENT TRADING SYSTEM - AGGRESSIVE MODE")
         print("=" * 70)
         print(f"  Wallet:   {self.wallet}")
         print(f"  Network:  devnet")
@@ -564,11 +618,17 @@ class AgentCoordinator:
         print(f"  Interval: {self.interval}s")
         print(f"  Started:  {self.start_time.strftime('%Y-%m-%d %H:%M:%S')}")
         print()
+        print(f"  PROFIT TARGETS:")
+        print(f"    Daily min:    {PROFIT_TARGETS['daily_min_pct']}%")
+        print(f"    Weekly goal:  2x (100%)")
+        print(f"    Monthly min:  2x (100%)")
+        print(f"    Position size: {PROFIT_TARGETS['min_position_pct']:.0%}-{PROFIT_TARGETS['max_position_pct']:.0%}")
+        print()
         print("  Agents:")
-        print("    Analysis      - Market scanning & signals")
+        print("    Analysis      - Tight signals (0.5% threshold)")
         print("    Accumulation  - BTC vs SOL target (from brain)")
-        print("    Strategy      - Strategy evaluation")
-        print("    Risk          - Trade validation")
+        print("    Strategy      - Aggressive brain rules")
+        print("    Risk          - 30% max position, 15% daily stop")
         print("    Trading       - Quote & execution")
         print("=" * 70)
 
@@ -611,8 +671,12 @@ class AgentCoordinator:
             "strategies": self.strategist.get_summary(),
             "risk": {
                 "trades_today": self.risk.trades_today,
-                "daily_pnl": self.risk.daily_pnl
+                "daily_pnl": self.risk.daily_pnl,
+                "daily_pnl_pct": self.risk.daily_pnl_pct,
+                "daily_target_pct": self.risk.daily_target_pct,
+                "starting_balance": self.risk.starting_balance,
             },
+            "profit_targets": PROFIT_TARGETS,
             "accumulation": self.accumulation.current,
             "order_history": self.trader.order_history[-10:],
             "recent_activity": self.activity_log[-20:],
