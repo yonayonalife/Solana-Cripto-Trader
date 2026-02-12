@@ -409,13 +409,13 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Eko Multi-Agent Dashboard")
     parser.add_argument("--monitor", "-m", action="store_true", help="Run agent monitor (non-Streamlit)")
     parser.add_argument("--dashboard", "-d", action="store_true", help="Launch Streamlit dashboard")
-    parser.add_argument("--port", "-p", type=int, default=8501, help="Dashboard port")
+    parser.add_argument("--port", "-p", type=int, default=8502, help="Dashboard port")
     
     args = parser.parse_args()
     
     if args.dashboard or not args.monitor:
         print("🚀 Launching Multi-Agent Dashboard...")
-        print("   Open: http://localhost:8501")
+        print("   Open: http://localhost:8502")
         
         import subprocess
         import sys
