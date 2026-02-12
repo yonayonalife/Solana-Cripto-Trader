@@ -78,10 +78,8 @@ class TradingCommandProcessor:
     
     def get_quote(self, amount: float, side: str = "buy") -> str:
         """Get quote for swap."""
-        if side == "buy":
-            return self.run_command(["--buy", str(amount)])
-        else:
-            return self.run_command(["--sell", str(amount)])
+        # Quote always shows SOL -> USDC
+        return self.run_command(["--quote", str(amount)])
     
     def process_message(self, message: str) -> Optional[str]:
         """
@@ -94,6 +92,10 @@ class TradingCommandProcessor:
             Response string or None if no trading command detected
         """
         msg_lower = message.lower().strip()
+        
+        # Accept "Eko" or "Eco" as trigger words
+        # If message doesn't start with Eko/Eco, still process it
+        # This handles messages like "Eco, dame el precio de SOL"
         
         # Balance commands
         if "mi balance" in msg_lower or "balance" in msg_lower:
@@ -111,21 +113,21 @@ class TradingCommandProcessor:
         if "direcci" in msg_lower or "address" in msg_lower or "wallet" in msg_lower:
             return self.get_address()
         
-        # Buy commands
+        # Buy commands - show quote
         buy_match = re.search(r"compra\s+([\d.]+)\s*sol", msg_lower)
         if buy_match:
             amount = float(buy_match.group(1))
             if 0.001 <= amount <= 10:  # Sanity check
-                return self.buy(amount)
+                return self.get_quote(amount, "buy")
             else:
                 return "❌ Amount must be between 0.001 and 10 SOL"
         
-        # Sell commands
+        # Sell commands - show quote
         sell_match = re.search(r"vende\s+([\d.]+)\s*sol", msg_lower)
         if sell_match:
             amount = float(sell_match.group(1))
             if 0.001 <= amount <= 10:
-                return self.sell(amount)
+                return self.get_quote(amount, "sell")
             else:
                 return "❌ Amount must be between 0.001 and 10 SOL"
         

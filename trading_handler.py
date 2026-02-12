@@ -65,7 +65,21 @@ class TradingHandler:
         self.rpc_url = self.RPC_DEVNET if network == "devnet" else self.RPC_MAINNET
         self.client = Client(self.rpc_url)
         self.keypair: Optional[Keypair] = None
+        self.jupiter_api_key = self._load_jupiter_key()
         self._load_wallet()
+    
+    def _load_jupiter_key(self) -> str:
+        """Load Jupiter API key from .env."""
+        env_file = PROJECT_ROOT / ".env"
+        if env_file.exists():
+            # Find the last JUPITER_API_KEY= entry (the one with value)
+            lines = env_file.read_text().split("\n")
+            for line in reversed(lines):
+                if line.startswith("JUPITER_API_KEY="):
+                    key = line.split("=", 1)[1].strip()
+                    if key:  # Has value
+                        return key
+        return ""
     
     def _load_wallet(self):
         """Load wallet from .env or file."""
@@ -156,7 +170,16 @@ class TradingHandler:
                 "slippageBps": 50
             }
             
-            response = requests.get(self.JUPITER_QUOTE_URL, params=params)
+            headers = {}
+            if self.jupiter_api_key:
+                headers["Authorization"] = f"Bearer {self.jupiter_api_key}"
+            
+            response = requests.get(self.JUPITER_QUOTE_URL, params=params, headers=headers)
+            
+            if response.status_code == 401:
+                return f"⚠️ **Quote unavailable**\n\nLa API de Jupiter requiere autenticación.\n" \
+                       f"Obten tu API key gratis: https://portal.jup.ag"
+            
             data = response.json()
             
             in_amount = data.get("inAmount", 0) / 1e9
@@ -262,6 +285,8 @@ Ejemplos:
                        help="Show wallet balance")
     parser.add_argument("--price", action="store_true",
                        help="Get SOL price")
+    parser.add_argument("--quote", type=float, metavar="AMOUNT",
+                       help="Get quote for swapping AMOUNT SOL <-> USDC")
     parser.add_argument("--buy", type=float, metavar="AMOUNT",
                        help="Buy AMOUNT of SOL")
     parser.add_argument("--sell", type=float, metavar="AMOUNT",
@@ -285,10 +310,16 @@ Ejemplos:
     elif args.price:
         print(handler.get_sol_price())
     
+    elif args.quote:
+        # Show quote for buying SOL (SOL -> USDC)
+        print(handler.get_quote(args.quote, "buy"))
+    
     elif args.buy:
+        # Execute buy swap (placeholder for now)
         print(handler.execute_swap(args.buy, "buy"))
     
     elif args.sell:
+        # Execute sell swap (placeholder for now)
         print(handler.execute_swap(args.sell, "sell"))
     
     elif args.status:
