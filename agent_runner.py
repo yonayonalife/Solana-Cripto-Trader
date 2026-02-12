@@ -162,6 +162,33 @@ class TradingAgent:
         logger.info(f"Trade logged: {trade}")
 
 
+class AccumulationReader:
+    """Reads accumulation targets set by agent_brain's AccumulationAgent."""
+
+    def __init__(self):
+        self.target_file = PROJECT_ROOT / "data" / "accumulation_target.json"
+        self.current: Dict = {"SOL": 0.60, "BTC": 0.40, "recommendation": "SOL"}
+        self._last_read = None
+
+    def get_target(self) -> Dict:
+        """Read latest accumulation target (cached for 60s)."""
+        now = datetime.now()
+        if self._last_read and (now - self._last_read).seconds < 60:
+            return self.current
+
+        if self.target_file.exists():
+            try:
+                data = json.loads(self.target_file.read_text())
+                self.current = data
+                self._last_read = now
+                logger.info(f"[Accumulation] Target: SOL={data.get('SOL', 0.5):.0%} "
+                           f"BTC={data.get('BTC', 0.5):.0%} "
+                           f"Rec={data.get('recommendation', '?')}")
+            except Exception as e:
+                logger.warning(f"[Accumulation] Read error: {e}")
+        return self.current
+
+
 class StrategyAgent:
     """Generates and evaluates trading strategies."""
 
@@ -242,14 +269,34 @@ class StrategyAgent:
             return {"action": "WAIT", "reason": "Low confidence", "strategy": self.active_strategy["name"]}
 
         if signal == "BUY":
-            return {
-                "action": "BUY",
-                "token_from": "USDC",
-                "token_to": "SOL",
-                "amount_sol": 0.05,
-                "reason": f"Signal: {signal} @ ${price:.2f}",
-                "strategy": self.active_strategy["name"]
-            }
+            # Use accumulation target to decide WHAT to buy
+            accum = analysis.get("accumulation", {})
+            rec = accum.get("recommendation", "SOL")
+            sol_pct = accum.get("SOL", 0.6)
+            btc_pct = accum.get("BTC", 0.4)
+
+            # Primary: buy what the accumulation agent recommends
+            if rec == "BTC" and btc_pct >= 0.5:
+                return {
+                    "action": "BUY",
+                    "token_from": "SOL",
+                    "token_to": "cbBTC",
+                    "token_to_mint": "cbbtcf3aa214zXHbiAZQwf4122FBYbraNdFqgw4iMij",
+                    "amount_sol": 0.05,
+                    "reason": f"Signal: {signal} @ ${price:.2f} | Accumulate BTC ({btc_pct:.0%})",
+                    "strategy": self.active_strategy["name"],
+                    "accumulation": rec,
+                }
+            else:
+                return {
+                    "action": "BUY",
+                    "token_from": "USDC",
+                    "token_to": "SOL",
+                    "amount_sol": 0.05,
+                    "reason": f"Signal: {signal} @ ${price:.2f} | Accumulate SOL ({sol_pct:.0%})",
+                    "strategy": self.active_strategy["name"],
+                    "accumulation": rec,
+                }
         elif signal == "SELL":
             return {
                 "action": "SELL",
@@ -293,6 +340,7 @@ class AgentCoordinator:
         self.risk = RiskAgent()
         self.trader = TradingAgent(self.jupiter, wallet_address)
         self.strategist = StrategyAgent()
+        self.accumulation = AccumulationReader()
 
         self.activity_log: List[Dict] = []
 
@@ -321,6 +369,15 @@ class AgentCoordinator:
                   f"SOL=${analysis['sol_price']:.2f} Signal={analysis['signal']} "
                   f"Conf={analysis['confidence']:.0%} Trending={analysis['trending'][:3]}")
         cycle_result["analysis"] = analysis
+
+        # 1.5 Read accumulation target from brain
+        accum = self.accumulation.get_target()
+        analysis["accumulation"] = accum
+        cycle_result["accumulation"] = {
+            "SOL": accum.get("SOL", 0.5),
+            "BTC": accum.get("BTC", 0.5),
+            "recommendation": accum.get("recommendation", "SOL"),
+        }
 
         # 2. Strategy evaluation
         self._log("Strategy", "Evaluating", self.strategist.active_strategy["name"])
@@ -406,10 +463,11 @@ class AgentCoordinator:
         print(f"  Started:  {self.start_time.strftime('%Y-%m-%d %H:%M:%S')}")
         print()
         print("  Agents:")
-        print("    Analysis   - Market scanning & signals")
-        print("    Strategy   - Strategy evaluation")
-        print("    Risk       - Trade validation")
-        print("    Trading    - Quote & execution")
+        print("    Analysis      - Market scanning & signals")
+        print("    Accumulation  - BTC vs SOL target (from brain)")
+        print("    Strategy      - Strategy evaluation")
+        print("    Risk          - Trade validation")
+        print("    Trading       - Quote & execution")
         print("=" * 70)
 
         while self.running:
@@ -451,6 +509,7 @@ class AgentCoordinator:
                 "trades_today": self.risk.trades_today,
                 "daily_pnl": self.risk.daily_pnl
             },
+            "accumulation": self.accumulation.current,
             "order_history": self.trader.order_history[-10:],
             "recent_activity": self.activity_log[-20:],
             "price_history": self.analyst.price_history[-30:]

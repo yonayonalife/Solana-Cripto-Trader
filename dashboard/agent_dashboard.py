@@ -56,6 +56,10 @@ def load_optimized() -> Dict:
     return load_json(PROJECT_ROOT / "data" / "optimized_strategies.json")
 
 
+def load_accumulation() -> Dict:
+    return load_json(PROJECT_ROOT / "data" / "accumulation_target.json")
+
+
 # ============================================================================
 # DASHBOARD
 # ============================================================================
@@ -153,6 +157,7 @@ def create_dashboard():
         last_cycle = brain.get("last_cycle", {}).get("agents", {})
         brain_agents = [
             ("🔍", "TokenScout", last_cycle.get("scout", {}).get("status", "idle")),
+            ("🎯", "Accumulator", last_cycle.get("accumulator", {}).get("status", "idle")),
             ("📥", "DataCollector", last_cycle.get("data_collector", {}).get("status", "idle")),
             ("🧪", "Backtester", last_cycle.get("backtester", {}).get("status", "idle")),
             ("🧬", "Optimizer", last_cycle.get("optimizer", {}).get("status", "idle")),
@@ -301,6 +306,45 @@ def create_dashboard():
     # ======================== TAB 3: TRADING & STRATEGIES ========================
     with tab3:
         st.header("📈 Trading & Strategy Performance")
+
+        # === ACCUMULATION TARGET ===
+        accum = load_accumulation()
+        if accum and accum.get("SOL"):
+            st.subheader("🎯 Accumulation Target")
+            col_a, col_b, col_c, col_d = st.columns(4)
+
+            sol_pct = accum.get("SOL", 0.5)
+            btc_pct = accum.get("BTC", 0.5)
+            rec = accum.get("recommendation", "?")
+            conf = accum.get("confidence", 0)
+
+            col_a.metric("SOL Allocation", f"{sol_pct:.0%}")
+            col_b.metric("BTC Allocation", f"{btc_pct:.0%}")
+            col_c.metric("Recommendation", f"Accumulate {rec}")
+            col_d.metric("Confidence", f"{conf:.0%}")
+
+            reasoning = accum.get("reasoning", {})
+            if reasoning:
+                with st.expander("Reasoning Details", expanded=False):
+                    r_col1, r_col2 = st.columns(2)
+                    r_col1.write(f"**SOL Price:** ${reasoning.get('sol_price', 0):,.2f}")
+                    r_col1.write(f"**SOL 24h Change:** {reasoning.get('sol_24h_change', 0):+.2f}%")
+                    r_col1.write(f"**SOL Score:** {reasoning.get('sol_score', 0)}")
+                    r_col2.write(f"**BTC Price:** ${reasoning.get('btc_price', 0):,.2f}")
+                    r_col2.write(f"**BTC 24h Change:** {reasoning.get('btc_24h_change', 0):+.2f}%")
+                    r_col2.write(f"**BTC Score:** {reasoning.get('btc_score', 0)}")
+
+                    factors = reasoning.get("factors", [])
+                    if factors:
+                        st.write("**Decision Factors:**")
+                        for f in factors:
+                            st.write(f"- {f}")
+
+                updated = accum.get("updated", "")
+                if updated:
+                    st.caption(f"Last updated: {updated[:19]}")
+
+            st.markdown("---")
 
         # Runner strategy info
         runner_strats = runner.get("strategies", {})

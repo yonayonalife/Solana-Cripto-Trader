@@ -51,6 +51,7 @@ KNOWLEDGE_DIR = DATA_DIR / "knowledge"
 WATCHLIST_FILE = DATA_DIR / "token_watchlist.json"
 ACTIVE_STRATEGIES_FILE = DATA_DIR / "active_strategies.json"
 OPTIMIZED_FILE = DATA_DIR / "optimized_strategies.json"
+ACCUMULATION_FILE = DATA_DIR / "accumulation_target.json"
 BRAIN_STATE_FILE = PROJECT_ROOT / "brain_state.json"
 DB_PATH = str(DATA_DIR / "genetic_results.db")
 
@@ -779,6 +780,214 @@ class DeploymentAgent:
 
 
 # ============================================================================
+# ACCUMULATION AGENT
+# ============================================================================
+
+class AccumulationAgent:
+    """Decides optimal BTC vs SOL accumulation based on real-time market data.
+
+    Analyzes multiple factors to determine which asset to accumulate more:
+    - Relative strength (24h performance comparison)
+    - Buy-the-dip detection (larger drops = bigger opportunity)
+    - Trend momentum (consecutive price direction)
+    - Historical volatility ratio
+    - Knowledge base insights from past trades
+
+    Outputs allocation percentages (e.g. SOL=65%, BTC=35%) to
+    data/accumulation_target.json, which agent_runner.py reads.
+    """
+
+    # cbBTC mint on Solana
+    BTC_MINT = "cbbtcf3aa214zXHbiAZQwf4122FBYbraNdFqgw4iMij"
+    SOL_MINT = "So11111111111111111111111111111111111111112"
+
+    def __init__(self, jupiter: JupiterClient):
+        self.jupiter = jupiter
+        self.history: List[Dict] = []
+        self.price_snapshots: List[Dict] = []  # Rolling price window
+        self.current_target: Dict = {"SOL": 0.60, "BTC": 0.40}
+
+    async def decide(self, watchlist: List[Dict], knowledge: Dict = None) -> Dict:
+        """Analyze BTC vs SOL and decide accumulation allocation."""
+        logger.info("[Accumulator] Analyzing BTC vs SOL allocation...")
+
+        # Get data from watchlist first (already fetched by Scout)
+        sol_data = next((t for t in watchlist if t["symbol"] == "SOL"), None)
+        btc_data = next((t for t in watchlist if t["symbol"] == "cbBTC"), None)
+
+        # Fallback: fetch directly if not in watchlist
+        if not sol_data or not btc_data:
+            try:
+                mints = [self.SOL_MINT, self.BTC_MINT]
+                prices = await self.jupiter.get_price(mints)
+
+                if not sol_data:
+                    pd_sol = prices.get(self.SOL_MINT, {})
+                    sol_data = {
+                        "symbol": "SOL",
+                        "price": float(pd_sol.get("usdPrice", 0)) if isinstance(pd_sol, dict) else 0,
+                        "price_change_24h": pd_sol.get("priceChange24h", 0) if isinstance(pd_sol, dict) else 0,
+                    }
+                if not btc_data:
+                    pd_btc = prices.get(self.BTC_MINT, {})
+                    btc_data = {
+                        "symbol": "cbBTC",
+                        "price": float(pd_btc.get("usdPrice", 0)) if isinstance(pd_btc, dict) else 0,
+                        "price_change_24h": pd_btc.get("priceChange24h", 0) if isinstance(pd_btc, dict) else 0,
+                    }
+            except Exception as e:
+                logger.warning(f"[Accumulator] Price fetch error: {e}")
+                return self.current_target
+
+        sol_price = sol_data.get("price", 0)
+        btc_price = btc_data.get("price", 0)
+        sol_change = sol_data.get("price_change_24h", 0) or 0
+        btc_change = btc_data.get("price_change_24h", 0) or 0
+
+        if sol_price <= 0 or btc_price <= 0:
+            logger.warning("[Accumulator] Missing price data, keeping current target")
+            return self.current_target
+
+        # Track price snapshots for momentum analysis
+        self.price_snapshots.append({
+            "time": datetime.now().isoformat(),
+            "sol": sol_price,
+            "btc": btc_price,
+        })
+        self.price_snapshots = self.price_snapshots[-60:]  # Keep ~5h of 5-min snapshots
+
+        # === SCORING SYSTEM ===
+        sol_score = 0.0
+        btc_score = 0.0
+        reasons = []
+
+        # Factor 1: Buy-the-dip (contrarian) - favor whichever dropped more
+        # Bigger drops = bigger accumulation opportunity
+        if sol_change < btc_change:
+            dip_bonus = min(abs(sol_change - btc_change) * 0.5, 3.0)
+            sol_score += 2.0 + dip_bonus
+            reasons.append(f"SOL dipped more ({sol_change:+.1f}% vs {btc_change:+.1f}%)")
+        elif btc_change < sol_change:
+            dip_bonus = min(abs(btc_change - sol_change) * 0.5, 3.0)
+            btc_score += 2.0 + dip_bonus
+            reasons.append(f"BTC dipped more ({btc_change:+.1f}% vs {sol_change:+.1f}%)")
+
+        # Factor 2: Absolute drop detection (flash crash = opportunity)
+        if sol_change < -5:
+            sol_score += 4.0
+            reasons.append(f"SOL flash crash ({sol_change:+.1f}%) - strong accumulate")
+        elif sol_change < -3:
+            sol_score += 2.0
+            reasons.append(f"SOL significant drop ({sol_change:+.1f}%)")
+        elif sol_change < -1:
+            sol_score += 0.5
+
+        if btc_change < -5:
+            btc_score += 4.0
+            reasons.append(f"BTC flash crash ({btc_change:+.1f}%) - strong accumulate")
+        elif btc_change < -3:
+            btc_score += 2.0
+            reasons.append(f"BTC significant drop ({btc_change:+.1f}%)")
+        elif btc_change < -1:
+            btc_score += 0.5
+
+        # Factor 3: Momentum (if enough snapshots, check short-term trend)
+        if len(self.price_snapshots) >= 6:
+            recent = self.price_snapshots[-6:]
+            sol_mom = (recent[-1]["sol"] - recent[0]["sol"]) / recent[0]["sol"]
+            btc_mom = (recent[-1]["btc"] - recent[0]["btc"]) / recent[0]["btc"]
+
+            # Favor the one with negative momentum (buy low)
+            if sol_mom < -0.01 and sol_mom < btc_mom:
+                sol_score += 1.5
+                reasons.append(f"SOL short-term downtrend ({sol_mom:+.2%})")
+            elif btc_mom < -0.01 and btc_mom < sol_mom:
+                btc_score += 1.5
+                reasons.append(f"BTC short-term downtrend ({btc_mom:+.2%})")
+
+            # But also reward strong uptrend (ride the wave for the other)
+            if sol_mom > 0.03:
+                sol_score += 1.0
+                reasons.append(f"SOL strong momentum ({sol_mom:+.2%})")
+            if btc_mom > 0.03:
+                btc_score += 1.0
+                reasons.append(f"BTC strong momentum ({btc_mom:+.2%})")
+
+        # Factor 4: BTC is digital gold - slight safety bias
+        btc_score += 1.0
+        reasons.append("BTC safety premium (+1)")
+
+        # Factor 5: SOL ecosystem activity (if many trending tokens, SOL ecosystem is hot)
+        sol_ecosystem_tokens = sum(1 for t in watchlist if t.get("source", "").startswith("trending"))
+        if sol_ecosystem_tokens >= 10:
+            sol_score += 1.5
+            reasons.append(f"Hot SOL ecosystem ({sol_ecosystem_tokens} trending tokens)")
+        elif sol_ecosystem_tokens >= 5:
+            sol_score += 0.5
+
+        # Factor 6: Learn from knowledge base
+        if knowledge and knowledge.get("strategies"):
+            # If strategies are profitable, SOL ecosystem is working well
+            profitable = sum(1 for s in knowledge["strategies"].values()
+                           if s.get("avg_pnl", 0) > 0)
+            if profitable >= 3:
+                sol_score += 1.0
+                reasons.append(f"SOL strategies profitable ({profitable} winning)")
+
+        # === CALCULATE ALLOCATION ===
+        total = sol_score + btc_score
+        if total == 0:
+            sol_pct, btc_pct = 0.50, 0.50
+        else:
+            sol_pct = sol_score / total
+            btc_pct = btc_score / total
+
+        # Enforce bounds: minimum 20% each, maximum 80%
+        sol_pct = max(0.20, min(0.80, sol_pct))
+        btc_pct = 1.0 - sol_pct
+
+        recommendation = "SOL" if sol_pct > btc_pct else "BTC"
+        confidence = abs(sol_pct - btc_pct) / 0.60  # 0-1 scale (0.60 max spread)
+
+        target = {
+            "SOL": round(sol_pct, 2),
+            "BTC": round(btc_pct, 2),
+            "recommendation": recommendation,
+            "confidence": round(min(confidence, 1.0), 2),
+            "reasoning": {
+                "sol_price": round(sol_price, 2),
+                "btc_price": round(btc_price, 2),
+                "sol_24h_change": round(sol_change, 2),
+                "btc_24h_change": round(btc_change, 2),
+                "sol_score": round(sol_score, 1),
+                "btc_score": round(btc_score, 1),
+                "factors": reasons,
+            },
+            "updated": datetime.now().isoformat(),
+        }
+
+        self.current_target = target
+        self.history.append({
+            "time": datetime.now().isoformat(),
+            "sol_pct": sol_pct,
+            "btc_pct": btc_pct,
+            "rec": recommendation,
+        })
+        self.history = self.history[-100:]
+
+        # Save for runner to consume
+        with open(ACCUMULATION_FILE, "w") as f:
+            json.dump(target, f, indent=2)
+
+        logger.info(f"[Accumulator] Target: SOL={sol_pct:.0%} BTC={btc_pct:.0%} "
+                    f"| Recommend: {recommendation} "
+                    f"| Conf: {confidence:.0%} "
+                    f"| {'; '.join(reasons[:3])}")
+
+        return target
+
+
+# ============================================================================
 # BRAIN COORDINATOR
 # ============================================================================
 
@@ -798,6 +1007,7 @@ class BrainCoordinator:
         self.optimizer = OptimizerAgent()
         self.learner = LearningAgent()
         self.deployer = DeploymentAgent()
+        self.accumulator = AccumulationAgent(self.jupiter)
 
         self.last_results: Dict = {}
 
@@ -823,7 +1033,24 @@ class BrainCoordinator:
             watchlist = self.scout.last_watchlist or []
             cycle_result["agents"]["scout"] = {"status": "error", "error": str(e)}
 
-        # 2. Data collection (every 3 cycles = ~15 min)
+        # 2. Accumulation decision (every cycle - needs fresh price data)
+        try:
+            accum_target = await self.accumulator.decide(
+                watchlist,
+                knowledge=self.learner.knowledge if self.learner.knowledge else None,
+            )
+            cycle_result["agents"]["accumulator"] = {
+                "status": "ok",
+                "recommendation": accum_target.get("recommendation", "?"),
+                "sol_pct": accum_target.get("SOL", 0.5),
+                "btc_pct": accum_target.get("BTC", 0.5),
+                "confidence": accum_target.get("confidence", 0),
+            }
+        except Exception as e:
+            logger.error(f"[Brain] Accumulator error: {e}")
+            cycle_result["agents"]["accumulator"] = {"status": "error", "error": str(e)}
+
+        # 3. Data collection (every 3 cycles = ~15 min)
         if self.cycle % 3 == 1 or self.cycle == 1:
             try:
                 data_summary = await self.collector.collect(watchlist)
@@ -911,6 +1138,7 @@ class BrainCoordinator:
         print()
         print("  Agents:")
         print("    TokenScout     - Token scanning (every cycle)")
+        print("    Accumulator    - BTC vs SOL allocation (every cycle)")
         print("    DataCollector  - Historical data (every 3 cycles)")
         print("    Backtester     - Strategy testing (every 2 cycles)")
         print("    Optimizer      - GA evolution (every 6 cycles)")
@@ -959,6 +1187,10 @@ class BrainCoordinator:
             "deployer": {
                 "deployed_count": len(self.deployer.deployed),
                 "history": self.deployer.deploy_history[-10:],
+            },
+            "accumulator": {
+                "current_target": self.accumulator.current_target,
+                "history": self.accumulator.history[-20:],
             },
             "learner": {
                 "strategies_tracked": len(self.learner.knowledge.get("strategies", {})),
