@@ -48,9 +48,17 @@ REBALANCE_THRESHOLD = 0.05   # 5% drift from target triggers rebalance
 REBALANCE_CONFIDENCE_AUTO = 0.80  # 80%+ = execute immediately
 REBALANCE_CONFIDENCE_ALERT = 0.60  # 60-80% = alert user first
 
-# Target Allocation
+# Target Allocation (STUDY RESULT: 50/30/20 is optimal for +5% daily)
 TARGET_ALLOCATION = {
-    "SOL": 0.40,
-    "BTC": 0.40,
-    "USDT": 0.20
+    "SOL": 0.50,   # 50% - Más oportunidades de trading
+    "BTC": 0.30,   # 30% - Estabilidad  
+    "USDT": 0.20   # 20% - Reserve y dips
+}
+
+# Adaptive Allocation Rules
+ADAPTIVE_ALLOCATION = {
+    "BULL_MARKET": {"SOL": 0.55, "BTC": 0.25, "USDT": 0.20},
+    "BEAR_MARKET": {"SOL": 0.30, "BTC": 0.50, "USDT": 0.20},
+    "LATERAL": {"SOL": 0.50, "BTC": 0.30, "USDT": 0.20},  # DEFAULT
+    "HIGH_VOL": {"SOL": 0.60, "BTC": 0.20, "USDT": 0.20}
 }
