@@ -188,6 +188,12 @@ Max ganancia diaria: +50% (tomar profits)
 ## 📋 CONFIGURACIÓN POR DEFECTO
 
 ```yaml
+# Rebalanceo Automático
+rebalance_enabled: true
+rebalance_threshold: 0.05  # 5% drift from target
+rebalance_confidence_auto: 0.80  # 80%+ confidence = auto execute
+rebalance_confidence_alert: 0.60  # 60-80% = alert user first
+
 # Capital
 initial_capital: 500
 min_trade_size: 10  # USD
@@ -255,6 +261,42 @@ Track portfolio value
 Reinvest 70% of profits
 Accumulate 30% in USDT
 Return: {total_value, reinvested, reserved}
+```
+
+### execute_rebalance_if_needed()
+```
+REBALANCEO AUTOMÁTICO LOGIC:
+
+1. Check current allocation:
+   - SOL_current, BTC_current, USDT_current
+
+2. Calculate drift from target (40/40/20):
+   - SOL_drift = SOL_current - 0.40
+   - BTC_drift = BTC_current - 0.40
+   - USDT_drift = USDT_current - 0.20
+
+3. IF any drift > 5%:
+   - Calculate confidence score
+   - IF confidence > 80%:
+       → EXECUTE REBALANCE IMMEDIATELY
+       → Notify user AFTER execution
+   - IF confidence 60-80%:
+       → ALERT USER FIRST
+       → Wait for confirmation
+   - IF confidence < 60%:
+       → HOLD - Review manually
+       → Require manual approval
+
+4. Rebalance actions:
+   - IF SOL > 55%: Sell SOL → Buy BTC/USDT
+   - IF BTC > 55%: Sell BTC → Buy SOL/USDT
+   - IF USDT > 35%: Buy SOL/BTC
+   - IF USDT < 15%: Sell SOL/BTC → Buy USDT
+
+5. Execute via Jupiter API:
+   - Calculate exact amounts
+   - Set max slippage 2%
+   - Priority fee: 1000 lamports
 ```
 
 ---

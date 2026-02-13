@@ -39,3 +39,18 @@ PRIORITY_PAIRS = {
 # USDT Reserve Target
 USDT_TARGET = 0.30      # Keep 30% in USDT for dips
 USDT_BUY_TRIGGER = -0.15  # Buy when market dips > 15%
+
+# ============================================
+# 🎯 AUTO REBALANCING CONFIG
+# ============================================
+REBALANCE_ENABLED = True
+REBALANCE_THRESHOLD = 0.05   # 5% drift from target triggers rebalance
+REBALANCE_CONFIDENCE_AUTO = 0.80  # 80%+ = execute immediately
+REBALANCE_CONFIDENCE_ALERT = 0.60  # 60-80% = alert user first
+
+# Target Allocation
+TARGET_ALLOCATION = {
+    "SOL": 0.40,
+    "BTC": 0.40,
+    "USDT": 0.20
+}
