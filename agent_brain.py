@@ -671,7 +671,7 @@ class LearningAgent:
         Evaluates against PROFIT_TARGETS: 5%+ daily, 2x monthly.
         """
         lessons = []
-        target_daily = PROFIT_TARGETS["daily_min_pct"] / 100.0  # 0.05
+        target_daily = PROFIT_TARGETS["daily_target_pct"] / 100.0  # 0.05
 
         for name, stats in self.knowledge["strategies"].items():
             if stats["total_tests"] >= 3:
@@ -1215,10 +1215,10 @@ class BrainCoordinator:
         print(f"  Started: {self.start_time.strftime('%Y-%m-%d %H:%M:%S')}")
         print()
         print(f"  PROFIT TARGETS:")
-        print(f"    Daily min:    {PROFIT_TARGETS['daily_min_pct']}%")
-        print(f"    Weekly goal:  2x (100%)")
-        print(f"    Monthly min:  2x (100%)")
-        print(f"    Deploy if:    PnL>{PROFIT_TARGETS['min_backtest_pnl']:.0%} "
+        print(f"    Daily target:  {PROFIT_TARGETS['daily_target_pct']}%")
+        print(f"    Weekly goal:   2x (100%)")
+        print(f"    Monthly min:   2x (100%)")
+        print(f"    Deploy if:     PnL>{PROFIT_TARGETS['min_backtest_pnl']:.0%} "
               f"WR>{PROFIT_TARGETS['min_win_rate']:.0%} "
               f"Trades>{PROFIT_TARGETS['min_trades_backtest']}")
         print()
