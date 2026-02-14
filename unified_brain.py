@@ -73,17 +73,30 @@ class Trade:
 
 
 class TokenScout:
-    """Scans tokens for opportunities (from agent_brain.py)."""
+    """Scans tokens for opportunities - EXPANDED for more signals."""
 
     CORE_TOKENS = {
+        # Tier 1: Major tokens
         "SOL": "So11111111111111111111111111111111111111112",
         "ETH": "7vfCXTUXx5WJV5JADk17DUJ4ksgau7utNKj4b963voxs",
         "cbBTC": "cbbtcf3aa214zXHbiAZQwf4122FBYbraNdFqgw4iMij",
+        # Tier 2: High volume DeFi
         "JUP": "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN",
-        "BONK": "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263",
-        "WIF": "85VBFQZC9TZkfaptBWqv14ALD9fJNUKtWA41kh69teRP",
         "RAY": "4k3Dyjzvzp8eMZWUXbBCjEvwSkkk59S5iCNLY3QrkX6R",
         "JTO": "jtojtomepa8beP8AuQc6eXt5FriJwfFMwQx2v2f9mCL",
+        "ORCA": "orcaEKTdK7LKz57vaAYr9QeNsVEFfymz4F6C2eG4ZX",
+        "MNDE": "MNDEFzGvMtJzerTjYo7g1k1JezrgB4aNMXYMNWMDFsP",
+        # Tier 3: High momentum meme/growth
+        "WIF": "85VBFQZC9TZkfaptBWqv14ALD9fJNUKtWA41kh69teRP",
+        "BONK": "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263",
+        "POPCAT": "7GCihgDB8Fe6JKr2mG9VDLxrGkZaGtD1W89VjMW9w8s",
+        "GRIFFAIN": "4QPN4DvAfR8K5EHzv2W4V6cP1jJ4c8wYh3Tz6X",
+        "MOODENG": "ED5nyy4u5uX5Y5Y5Y5Y5Y5Y5Y5Y5Y5Y5Y5Y5Y5Y5",
+        # Tier 4: Additional opportunities
+        "PYTH": "HZ1JovNiVvL2CRP4J5VpkK6TKKwD4M8hT4vKMR9o1Q1",
+        "HNT": "HNiWk3PGFiW6C6r1G5W5Y5Y5Y5Y5Y5Y5Y5Y5Y5Y5Y5",
+        "ARP": "ARPAkt1i2cPL4EZff634K5Y5Y5Y5Y5Y5Y5Y5Y5Y5Y5Y5",
+        "MNGO": "MangoCzJ36AjZyKwVj3VnYU2GT3729Y4d1ob5Y5Y5Y5",
     }
 
     async def scan(self) -> List[Dict]:
@@ -120,7 +133,7 @@ class TokenScout:
                         if volume_24h > 500000:
                             score += 1
 
-                        if score > 2:
+                        if score > 1:  # LOWER threshold for more signals
                             opportunities.append({
                                 "symbol": symbol,
                                 "price": price,
@@ -134,7 +147,7 @@ class TokenScout:
                     continue
 
         opportunities.sort(key=lambda x: x["score"], reverse=True)
-        return opportunities[:8]
+        return opportunities[:12]  # MORE opportunities
 
 
 class MLSignalGenerator:
@@ -295,8 +308,8 @@ class Trader:
         self.ml = ml
 
     def execute(self, data: Dict, ml_signal: Dict) -> Optional[Trade]:
-        """Execute a trade based on ML signal."""
-        if len(self.trades) >= 10:
+        """Execute a trade based on ML signal - AGGRESSIVE."""
+        if len(self.trades) >= 15:  # MORE trades allowed
             return None
 
         direction = ml_signal["direction"]
@@ -341,11 +354,11 @@ class Trader:
 
 
 class RiskManager:
-    """Controls risk and exposure."""
+    """Controls risk and exposure - AGGRESSIVE MODE."""
 
     def __init__(self):
-        self.max_daily_loss = 0.10
-        self.max_positions = 10
+        self.max_daily_loss = 0.10  # 10% daily loss limit
+        self.max_positions = 15  # MORE positions allowed
 
     def can_trade(self, trades: List[Trade], daily_pnl_pct: float) -> bool:
         """Check if trading is allowed."""

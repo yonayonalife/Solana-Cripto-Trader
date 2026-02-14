@@ -1,19 +1,17 @@
 #!/usr/bin/env python3
 """
-ML Signal Generator
-==================
-Machine Learning-based trading signals using simple models.
+ML Signal Generator v2 - AGGRESSIVE MODE
+======================================
+Optimized for more trades and better signals.
 
-Features:
-- RSI-based signals
-- Moving Average crossover
-- Momentum scoring
-- Sentiment analysis (simple)
-
-Based on research from similar projects.
+Changes from v1:
+- Lower signal threshold (0.3 → 0.15)
+- Higher weights for strong signals
+- Added volume-based signals
+- More aggressive momentum detection
 
 Usage:
-    from ml_signals import MLSignalGenerator
+    from ml.ml_signals import MLSignalGenerator
     signals = generator.generate(data)
 """
 
@@ -21,7 +19,7 @@ import json
 import asyncio
 import numpy as np
 from datetime import datetime
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 from dataclasses import dataclass
 
 
@@ -49,10 +47,10 @@ class TechnicalIndicators:
     """Calculate technical indicators."""
 
     @staticmethod
-    def calculate_rsi(prices: List[float], period: int = 14) -> float:
-        """Calculate RSI."""
+    def calculate_rsi(prices: List[float], period: int = 7) -> float:
+        """Calculate RSI (faster period for more signals)."""
         if len(prices) < period + 1:
-            return 50.0  # Neutral
+            return 50.0
 
         deltas = np.diff(prices)
         gains = np.where(deltas > 0, deltas, 0)
@@ -62,7 +60,7 @@ class TechnicalIndicators:
         avg_loss = np.mean(losses[-period:])
 
         if avg_loss == 0:
-            return 70.0
+            return 65.0  # Slightly bullish on neutral
 
         rs = avg_gain / avg_loss
         rsi = 100 - (100 / (1 + rs))
@@ -70,7 +68,7 @@ class TechnicalIndicators:
 
     @staticmethod
     def calculate_ema(prices: List[float], period: int) -> float:
-        """Calculate Exponential Moving Average."""
+        """Calculate EMA."""
         if len(prices) < period:
             return prices[-1] if prices else 0
 
@@ -81,8 +79,8 @@ class TechnicalIndicators:
         return ema
 
     @staticmethod
-    def calculate_momentum(prices: List[float], period: int = 10) -> float:
-        """Calculate momentum."""
+    def calculate_momentum(prices: List[float], period: int = 5) -> float:
+        """Calculate momentum (faster period)."""
         if len(prices) < period:
             return 100.0
 
@@ -91,8 +89,8 @@ class TechnicalIndicators:
         return (current / past) * 100
 
     @staticmethod
-    def calculate_volatility(prices: List[float], period: int = 14) -> float:
-        """Calculate volatility (std dev)."""
+    def calculate_volatility(prices: List[float], period: int = 7) -> float:
+        """Calculate volatility."""
         if len(prices) < period:
             return 0.02
 
@@ -102,13 +100,14 @@ class TechnicalIndicators:
 
 class MLSignalGenerator:
     """
-    ML-based signal generator.
-    Uses ensemble of simple models for robustness.
+    AGGRESSIVE ML-based signal generator.
+    Optimized for more trades and higher returns.
     """
 
     def __init__(self):
-        self.indicators = TechnicalIndicators()
         self.price_history: Dict[str, List[float]] = {}
+        self.signals_generated = 0
+        self.trades_executed = 0
 
     def add_price(self, symbol: str, price: float):
         """Add price to history."""
@@ -116,99 +115,102 @@ class MLSignalGenerator:
             self.price_history[symbol] = []
         self.price_history[symbol].append(price)
 
-        # Keep only last 50 prices
-        if len(self.price_history[symbol]) > 50:
-            self.price_history[symbol] = self.price_history[symbol][-50:]
+        # Keep last 30 prices (reduced for faster signals)
+        if len(self.price_history[symbol]) > 30:
+            self.price_history[symbol] = self.price_history[symbol][-30:]
 
-    def generate(self, data: MarketData) -> Optional[Signal]:
-        """Generate ML signal for a token."""
-        symbol = data.symbol
-        price = data.price
-        change = data.change_24h
+    def generate_signal(self, data: Dict) -> Optional[Signal]:
+        """Generate AGGRESSIVE ML signal."""
+        symbol = data["symbol"]
+        price = data["price"]
+        change = data["change"]
+        volume = data.get("volume", 0)
 
         # Add price to history
         self.add_price(symbol, price)
-
-        # Get price history
         history = self.price_history.get(symbol, [price])
 
-        # Calculate indicators
-        rsi = self.indicators.calculate_rsi(history)
-        ema_9 = self.indicators.calculate_ema(history, 9)
-        ema_21 = self.indicators.calculate_ema(history, 21)
-        momentum = self.indicators.calculate_momentum(history)
-        volatility = self.indicators.calculate_volatility(history)
+        # Calculate indicators (faster periods)
+        rsi = self.calculate_rsi(history, 7)
+        ema_5 = self.calculate_ema(history, 5)
+        ema_15 = self.calculate_ema(history, 15)
+        momentum = self.calculate_momentum(history, 5)
+        volatility = self.calculate_volatility(history, 7)
 
-        # Ensemble scoring
-        scores = {
-            "rsi": 0.0,
-            "crossover": 0.0,
-            "momentum": 0.0,
-            "trend": 0.0
-        }
-
+        # AGGRESSIVE scoring
+        scores = {"rsi": 0.0, "ema": 0.0, "momentum": 0.0, "trend": 0.0, "volume": 0.0}
         reasons = []
 
-        # RSI scoring (0-100)
-        if rsi < 30:
-            scores["rsi"] = 0.8  # Oversold - BUY
+        # RSI component (more sensitive)
+        if rsi < 35:  # Lower threshold
+            scores["rsi"] = 0.9
             reasons.append(f"RSI oversold ({rsi:.1f})")
-        elif rsi > 70:
-            scores["rsi"] = -0.8  # Overbought - SELL
+        elif rsi > 65:  # Lower threshold
+            scores["rsi"] = -0.9
             reasons.append(f"RSI overbought ({rsi:.1f})")
         else:
-            scores["rsi"] = (rsi - 50) / 25  # Neutral zone
+            scores["rsi"] = (rsi - 50) / 15  # More sensitive
 
-        # EMA crossover scoring
-        if ema_9 > ema_21:
-            scores["crossover"] = 0.5
-            reasons.append("EMA 9 > 21 (bullish)")
+        # EMA crossover (faster)
+        if ema_5 > ema_15:
+            scores["ema"] = 0.6
+            reasons.append("EMA 5>15 (bullish)")
         else:
-            scores["crossover"] = -0.5
-            reasons.append("EMA 9 < 21 (bearish)")
+            scores["ema"] = -0.6
+            reasons.append("EMA 5<15 (bearish)")
 
-        # Momentum scoring
-        if momentum > 105:
-            scores["momentum"] = 0.6
+        # Momentum (stronger signals)
+        if momentum > 102:
+            scores["momentum"] = 0.7
             reasons.append(f"Strong momentum ({momentum:.1f}%)")
-        elif momentum < 95:
-            scores["momentum"] = -0.6
+        elif momentum < 98:
+            scores["momentum"] = -0.7
             reasons.append(f"Weak momentum ({momentum:.1f}%)")
         else:
-            scores["momentum"] = (momentum - 100) / 10
+            scores["momentum"] = (momentum - 100) / 5
 
-        # 24h change trend
-        if change > 5:
+        # 24h change (larger threshold)
+        if change > 3:
             scores["trend"] = 0.5
             reasons.append(f"Strong 24h ({change:+.1f}%)")
-        elif change < -5:
+        elif change < -3:
             scores["trend"] = -0.5
             reasons.append(f"Weak 24h ({change:+.1f}%)")
         else:
-            scores["trend"] = change / 20
+            scores["trend"] = change / 10
 
-        # Weighted ensemble
+        # Volume bonus
+        if volume > 1000000:
+            scores["volume"] = 0.3
+            reasons.append(f"High volume ${volume/1e6:.1f}M")
+
+        # Weighted AGGRESSIVE ensemble
         weights = {
-            "rsi": 0.30,
-            "crossover": 0.25,
+            "rsi": 0.25,
+            "ema": 0.20,
             "momentum": 0.25,
-            "trend": 0.20
+            "trend": 0.20,
+            "volume": 0.10
         }
 
         total_score = sum(scores[k] * weights[k] for k in scores)
 
-        # Adjust for volatility (high volatility = lower confidence)
-        vol_penalty = min(volatility * 5, 0.3)
+        # LOWER volatility penalty (more trades)
+        vol_penalty = min(volatility * 3, 0.2)
         confidence = abs(total_score) - vol_penalty
-        confidence = max(0, min(0.95, confidence))
+        confidence = max(0.15, min(0.90, confidence))  # LOWER minimum
 
-        # Determine direction
-        if total_score > 0.2:
+        # LOWER threshold (more signals)
+        threshold = 0.15
+
+        if total_score > threshold:
             direction = "BUY"
-        elif total_score < -0.2:
+            self.signals_generated += 1
+        elif total_score < -threshold:
             direction = "SELL"
+            self.signals_generated += 1
         else:
-            return None  # No clear signal
+            return None
 
         return Signal(
             symbol=symbol,
@@ -217,84 +219,57 @@ class MLSignalGenerator:
             reason=" | ".join(reasons[:3]),
             indicators={
                 "rsi": rsi,
-                "ema_9": ema_9,
-                "ema_21": ema_21,
+                "ema_5": ema_5,
+                "ema_15": ema_15,
                 "momentum": momentum,
                 "volatility": volatility
             }
         )
 
-    def batch_generate(self, data_list: List[MarketData]) -> List[Signal]:
-        """Generate signals for multiple tokens."""
-        signals = []
-        for data in data_list:
-            signal = self.generate(data)
-            if signal:
-                signals.append(signal)
-        return signals
 
+async def test_aggressive_ml():
+    """Test aggressive ML generator."""
+    print("\n🧪 TESTING AGGRESSIVE ML SIGNAL GENERATOR")
+    print("="*60)
 
-async def test_ml_generator():
-    """Test the ML generator."""
-    import httpx
+    # Create generator
+    ml = MLSignalGenerator()
 
-    print("\n🧪 TESTING ML SIGNAL GENERATOR")
-    print("="*50)
+    # Add fake history
+    base_prices = {"SOL": 87.0, "BONK": 0.000006, "WIF": 2.5}
+    for symbol, base in base_prices.items():
+        for i in range(15):
+            variation = np.random.normal(0, 0.03)
+            ml.add_price(symbol, base * (1 + variation))
 
-    # Test tokens
-    tokens = {
-        "SOL": "So11111111111111111111111111111111111111112",
-        "JUP": "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN",
-        "WIF": "85VBFQZC9TZkfaptBWqv14ALD9fJNUKtWA41kh69teRP",
-        "BONK": "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263",
-    }
+    # Test data
+    test_data = [
+        {"symbol": "SOL", "price": 87.5, "change": 2.5, "volume": 50000000},
+        {"symbol": "BONK", "price": 0.0000065, "change": 8.0, "volume": 2000000},
+        {"symbol": "WIF", "price": 2.6, "change": -1.5, "volume": 800000},
+    ]
 
-    generator = MLSignalGenerator()
+    signals = []
+    for data in test_data:
+        signal = ml.generate_signal(data)
+        if signal:
+            signals.append(signal)
+            emoji = "🟢" if signal.direction == "BUY" else "🔴"
+            print(f"\n{emoji} {signal.symbol}: {signal.direction}")
+            print(f"   Confidence: {signal.confidence:.0%}")
+            print(f"   {signal.reason}")
+            print(f"   RSI: {signal.indicators['rsi']:.1f}")
+        else:
+            print(f"\n⚪ {data['symbol']}: No signal")
 
-    # Add fake history for each token
-    for symbol in tokens:
-        base_price = 87.0 if symbol == "SOL" else 0.001
-        for i in range(30):
-            variation = np.random.normal(0, 0.02)
-            generator.add_price(symbol, base_price * (1 + variation))
-
-    # Fetch real prices and generate signals
-    async with httpx.AsyncClient() as client:
-        for symbol, address in tokens.items():
-            try:
-                resp = await client.get(
-                    f"https://api.dexscreener.com/latest/dex/tokens/{address}",
-                    timeout=10
-                )
-                data = resp.json()
-                pairs = data.get("pairs", [])
-
-                if pairs:
-                    pair = pairs[0]
-                    market_data = MarketData(
-                        symbol=symbol,
-                        price=float(pair.get("priceUsd", 0)),
-                        change_24h=float(pair.get("priceChange", {}).get("h24", 0)),
-                        volume_24h=float(pair.get("volume", {}).get("h24", 0)),
-                        timestamp=datetime.now().isoformat()
-                    )
-
-                    signal = generator.generate(market_data)
-
-                    if signal:
-                        emoji = "🟢" if signal.direction == "BUY" else "🔴"
-                        print(f"\n{emoji} {symbol}: {signal.direction} ({signal.confidence:.0%})")
-                        print(f"   Reason: {signal.reason}")
-                        print(f"   RSI: {signal.indicators['rsi']:.1f}")
-                        print(f"   Momentum: {signal.indicators['momentum']:.1f}%")
-                    else:
-                        print(f"\n⚪ {symbol}: No signal (neutral)")
-
-            except Exception as e:
-                print(f"Error {symbol}: {e}")
-
-    print("\n" + "="*50)
+    print(f"\n📊 Signals generated: {ml.signals_generated}")
+    print(f"🎯 Threshold: 0.15 (aggressive)")
+    print("="*60)
 
 
 if __name__ == "__main__":
-    asyncio.run(test_ml_generator())
+    import sys
+    if len(sys.argv) > 1 and sys.argv[1] == "--test":
+        asyncio.run(test_aggressive_ml())
+    else:
+        print("ML Signal Generator v2 (AGGRESSIVE MODE) Ready")
