@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Unified Brain - Consolidated Trading System
-==========================================
+Unified Brain v2 - ML-Powered Trading System
+============================================
 Single brain that combines:
 - Token Scout (from agent_brain.py)
 - Strategy Optimizer (from agent_brain.py)
@@ -9,12 +9,13 @@ Single brain that combines:
 - WebSocket real-time data
 - Jito bundles
 - Database persistence
+- ML Signal Generator (NEW)
 
 Eliminates duplicate processes and consolidates all functionality.
 
 Usage:
     python3 unified_brain.py --start     # Start unified system
-    python3 unified_brain.py --status    # Check status
+    python3 unified_brain.py --status   # Check status
 """
 
 import json
@@ -23,6 +24,7 @@ import httpx
 import logging
 import signal
 import random
+import numpy as np
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -32,6 +34,7 @@ from dataclasses import dataclass, asdict
 from api.websocket_client import WebSocketSimulator
 from api.jito_client import JitoClient, JitoConfig
 from db.database import SQLiteDatabase, Trade as DBTrade
+from ml.ml_signals import MLSignalGenerator, MarketData
 
 # Configure logging
 logging.basicConfig(
@@ -133,15 +136,127 @@ class TokenScout:
         return opportunities[:8]
 
 
+class MLSignalGenerator:
+    """
+    ML-based signal generator for intelligent trading decisions.
+    Uses RSI, EMA crossovers, and momentum analysis.
+    """
+
+    def __init__(self):
+        self.price_history: Dict[str, List[float]] = {}
+
+    def add_price(self, symbol: str, price: float):
+        """Add price to history."""
+        if symbol not in self.price_history:
+            self.price_history[symbol] = []
+        self.price_history[symbol].append(price)
+        if len(self.price_history[symbol]) > 50:
+            self.price_history[symbol] = self.price_history[symbol][-50:]
+
+    def calculate_rsi(self, prices: List[float], period: int = 14) -> float:
+        """Calculate RSI."""
+        if len(prices) < period + 1:
+            return 50.0
+
+        deltas = np.diff(prices)
+        gains = np.where(deltas > 0, deltas, 0)
+        losses = np.where(deltas < 0, -deltas, 0)
+
+        avg_gain = np.mean(gains[-period:])
+        avg_loss = np.mean(losses[-period:])
+
+        if avg_loss == 0:
+            return 70.0
+
+        rs = avg_gain / avg_loss
+        return 100 - (100 / (1 + rs))
+
+    def calculate_ema(self, prices: List[float], period: int) -> float:
+        """Calculate EMA."""
+        if len(prices) < period:
+            return prices[-1] if prices else 0
+
+        alpha = 2 / (period + 1)
+        ema = prices[-1]
+        for price in reversed(prices[:-1]):
+            ema = alpha * price + (1 - alpha) * ema
+        return ema
+
+    def generate_signal(self, data: Dict) -> Optional[Dict]:
+        """Generate ML signal for a token."""
+        symbol = data["symbol"]
+        price = data["price"]
+        change = data["change"]
+
+        # Add price to history
+        self.add_price(symbol, price)
+        history = self.price_history.get(symbol, [price])
+
+        # Calculate indicators
+        rsi = self.calculate_rsi(history)
+        ema_9 = self.calculate_ema(history, 9)
+        ema_21 = self.calculate_ema(history, 21)
+
+        # Ensemble scoring
+        score = 0
+        reasons = []
+
+        # RSI component
+        if rsi < 30:
+            score += 0.8
+            reasons.append(f"RSI oversold ({rsi:.1f})")
+        elif rsi > 70:
+            score -= 0.8
+            reasons.append(f"RSI overbought ({rsi:.1f})")
+        else:
+            score += (rsi - 50) / 50
+
+        # EMA crossover
+        if ema_9 > ema_21:
+            score += 0.5
+            reasons.append("EMA 9>21 (bullish)")
+        else:
+            score -= 0.5
+            reasons.append("EMA 9<21 (bearish)")
+
+        # 24h change
+        if change > 5:
+            score += 0.5
+            reasons.append(f"Strong 24h ({change:+.1f}%)")
+        elif change < -5:
+            score -= 0.5
+            reasons.append(f"Weak 24h ({change:+.1f}%)")
+
+        # Determine signal
+        if score > 0.3:
+            return {
+                "symbol": symbol,
+                "direction": "BUY",
+                "confidence": min(score, 0.95),
+                "reason": " | ".join(reasons[:2]),
+                "indicators": {"rsi": rsi, "ema_9": ema_9, "ema_21": ema_21}
+            }
+        elif score < -0.3:
+            return {
+                "symbol": symbol,
+                "direction": "SELL",
+                "confidence": min(abs(score), 0.95),
+                "reason": " | ".join(reasons[:2]),
+                "indicators": {"rsi": rsi, "ema_9": ema_9, "ema_21": ema_21}
+            }
+
+        return None
+
+
 class StrategyOptimizer:
-    """Optimizes trading strategies (from agent_brain.py)."""
+    """Optimizes trading strategies."""
 
     def __init__(self):
         self.wins = 0
         self.losses = 0
         self.total_pnl = 0.0
         self.iterations = 0
-        self.best_params = {"threshold": 5.0, "risk_pct": 0.05}
+        self.best_params = {"threshold": 0.3, "risk_pct": 0.05}
 
     def analyze(self, trades: List[Trade]) -> Dict:
         """Analyze performance and adjust strategy."""
@@ -154,11 +269,11 @@ class StrategyOptimizer:
 
         win_rate = self.wins / len(closed) * 100 if closed else 0
 
-        # Adjust parameters based on performance
+        # Adjust parameters
         if win_rate < 40:
-            self.best_params["threshold"] += 1.0  # stricter signals
+            self.best_params["threshold"] += 0.1
         elif win_rate > 60:
-            self.best_params["threshold"] -= 0.5  # more signals
+            self.best_params["threshold"] -= 0.05
 
         return {
             "win_rate": win_rate,
@@ -169,33 +284,33 @@ class StrategyOptimizer:
 
 
 class Trader:
-    """Executes trades with Jito support."""
+    """Executes trades with ML signals."""
 
-    def __init__(self, jito: JitoClient):
+    def __init__(self, jito: JitoClient, ml: MLSignalGenerator):
         self.trades: List[Trade] = []
         self.daily_pnl_pct = 0.0
         self.trades_today = 0
         self.jito = jito
+        self.ml = ml
 
-    def execute(self, opportunity: Dict) -> Optional[Trade]:
-        """Execute a trade."""
+    def execute(self, data: Dict, ml_signal: Dict) -> Optional[Trade]:
+        """Execute a trade based on ML signal."""
         if len(self.trades) >= 10:
             return None
 
-        direction = "BUY" if opportunity["change"] > 0 else "SELL"
-
+        direction = ml_signal["direction"]
         trade = Trade(
             id=f"trade_{datetime.now().strftime('%H%M%S')}",
             time=datetime.now().strftime("%H:%M:%S"),
-            symbol=opportunity["symbol"],
+            symbol=data["symbol"],
             direction=direction,
-            entry_price=opportunity["price"],
+            entry_price=data["price"],
             size=TRADE_SIZE,
-            current_price=opportunity["price"],
+            current_price=data["price"],
             pnl_pct=0.0,
             pnl_value=0.0,
             status="open",
-            strategy="momentum"
+            strategy="ml_ensemble"
         )
 
         self.trades.append(trade)
@@ -215,7 +330,6 @@ class Trader:
 
                 trade.pnl_value = TRADE_SIZE * trade.pnl_pct / 100
 
-                # Auto-close at 10% profit or 5% loss
                 if trade.pnl_pct >= 10:
                     trade.status = "closed"
                 elif trade.pnl_pct <= -5:
@@ -249,11 +363,12 @@ class UnifiedBrain:
         self.ws = WebSocketSimulator()
         self.jito = JitoClient(JitoConfig(enabled=True))
         self.db = SQLiteDatabase(str(DB_FILE))
+        self.ml = MLSignalGenerator()
 
         # Initialize agents
         self.scout = TokenScout()
         self.optimizer = StrategyOptimizer()
-        self.trader = Trader(self.jito)
+        self.trader = Trader(self.jito, self.ml)
         self.risk = RiskManager()
 
         self.running = False
@@ -264,7 +379,7 @@ class UnifiedBrain:
         self.cycle_count += 1
 
         print(f"\n{'='*60}")
-        print(f"🧠 UNIFIED BRAIN CYCLE {self.cycle_count} - {datetime.now().strftime('%H:%M:%S')}")
+        print(f"🧠 UNIFIED BRAIN v2 (ML) - Cycle {self.cycle_count} - {datetime.now().strftime('%H:%M:%S')}")
         print(f"{'='*60}")
 
         # 1. Scout scans
@@ -272,58 +387,69 @@ class UnifiedBrain:
         opportunities = await self.scout.scan()
         print(f"   Found {len(opportunities)} opportunities")
 
-        if opportunities:
-            for i, opp in enumerate(opportunities[:5], 1):
-                print(f"   {i}. {opp['symbol']}: Score {opp['score']:.1f} ({opp['change']:+.1f}%)")
-
-        # 2. Trader executes
-        print("\n💰 TRADER: Executing trades...")
+        # 2. ML generates signals
+        print("\n🧠 ML SIGNAL GENERATOR:")
+        ml_signals = []
         for opp in opportunities[:5]:
-            if not self.risk.can_trade(self.trader.trades, self.trader.daily_pnl_pct):
-                print("   🛑 Risk limit hit")
-                break
+            signal = self.ml.generate_signal(opp)
+            if signal:
+                ml_signals.append(signal)
+                emoji = "🟢" if signal["direction"] == "BUY" else "🔴"
+                print(f"   {emoji} {signal['symbol']}: {signal['direction']} ({signal['confidence']:.0%})")
+                print(f"      {signal['reason']}")
+                print(f"      RSI: {signal['indicators']['rsi']:.1f}")
 
-            trade = self.trader.execute(opp)
-            if trade:
-                print(f"   ✅ {trade.direction} {trade.symbol} @ ${trade.entry_price:.4f}")
+        # 3. Trader executes
+        print("\n💰 TRADER: Executing ML signals...")
+        if not self.risk.can_trade(self.trader.trades, self.trader.daily_pnl_pct):
+            print("   🛑 Risk limit hit")
+        else:
+            for signal in ml_signals[:3]:
+                # Find opportunity data
+                opp = next((o for o in opportunities if o["symbol"] == signal["symbol"]), None)
+                if opp:
+                    trade = self.trader.execute(opp, signal)
+                    if trade:
+                        print(f"   ✅ {trade.direction} {trade.symbol} @ ${trade.entry_price:.4f}")
+                        print(f"      Confidence: {signal['confidence']:.0%} | {signal['reason']}")
 
-                # Save to database
-                db_trade = DBTrade(
-                    id=trade.id,
-                    symbol=trade.symbol,
-                    direction=trade.direction,
-                    entry_price=trade.entry_price,
-                    exit_price=None,
-                    size=trade.size,
-                    pnl=None,
-                    pnl_pct=None,
-                    status="open",
-                    timestamp=trade.time,
-                    strategy=trade.strategy
-                )
-                self.db.add_trade(db_trade)
+                        # Save to database
+                        db_trade = DBTrade(
+                            id=trade.id,
+                            symbol=trade.symbol,
+                            direction=trade.direction,
+                            entry_price=trade.entry_price,
+                            exit_price=None,
+                            size=trade.size,
+                            pnl=None,
+                            pnl_pct=None,
+                            status="open",
+                            timestamp=trade.time,
+                            strategy="ml_ensemble"
+                        )
+                        self.db.add_trade(db_trade)
 
-        # 3. Update prices
+        # 4. Update prices
         prices = {opp["symbol"]: opp["price"] for opp in opportunities}
         self.trader.update_prices(prices)
 
-        # 4. Optimizer analyzes
+        # 5. Optimizer analyzes
         print("\n🧠 OPTIMIZER: Analyzing...")
         analysis = self.optimizer.analyze(self.trader.trades)
         print(f"   Win Rate: {analysis['win_rate']:.1f}%")
         print(f"   P&L: ${analysis['total_pnl']:.2f}")
-        print(f"   Threshold: {analysis['params']['threshold']:.1f}")
+        print(f"   Threshold: {analysis['params']['threshold']:.2f}")
 
-        # 5. Progress
+        # 6. Progress
         closed = [t for t in self.trader.trades if t.status == "closed"]
         daily_pnl = sum(t.pnl_pct for t in closed)
         target = DAILY_TARGET_PCT * 100
 
         print(f"\n📊 PROGRESS: {daily_pnl:+.2f}% / +{target}% target")
         print(f"   Trades: {self.trader.trades_today}")
-        print(f"   Open: {len([t for t in self.trader.trades if t.status == 'open'])}")
+        print(f"   ML Signals: {len(ml_signals)}")
 
-        # 6. Open positions
+        # 7. Open positions
         print(f"\n📋 OPEN POSITIONS:")
         for trade in self.trader.trades:
             if trade.status == "open":
@@ -332,6 +458,7 @@ class UnifiedBrain:
 
         return {
             "opportunities": len(opportunities),
+            "ml_signals": len(ml_signals),
             "trades": self.trader.trades_today,
             "pnl_pct": daily_pnl,
             "win_rate": analysis["win_rate"]
@@ -340,12 +467,13 @@ class UnifiedBrain:
     def save_state(self):
         """Save brain state."""
         state = {
-            "brain": "unified",
-            "version": "1.0",
+            "brain": "unified_v2",
+            "version": "2.0",
             "modules": {
                 "websocket": True,
                 "jito": True,
                 "database": True,
+                "ml_signals": True,
                 "scout": True,
                 "optimizer": True
             },
@@ -363,12 +491,12 @@ class UnifiedBrain:
     async def run(self):
         """Main loop."""
         logger.info("\n" + "="*60)
-        logger.info("🧠 UNIFIED BRAIN - CONSOLIDATED SYSTEM")
+        logger.info("🧠 UNIFIED BRAIN v2 - ML POWERED TRADING")
         logger.info("="*60)
         logger.info(f"   Initial Capital: ${INITIAL_CAPITAL}")
         logger.info(f"   Daily Target: +{DAILY_TARGET_PCT*100}%")
         logger.info(f"   Trade Size: ${TRADE_SIZE}")
-        logger.info(f"   Cycle Interval: {CYCLE_INTERVAL}s")
+        logger.info(f"   ML Signals: ✅ Enabled")
         logger.info("="*60)
 
         self.running = True
@@ -387,7 +515,7 @@ class UnifiedBrain:
 
 def main():
     import argparse
-    parser = argparse.ArgumentParser(description="Unified Brain")
+    parser = argparse.ArgumentParser(description="Unified Brain v2")
     parser.add_argument("--fast", action="store_true", help="Fast mode (30s cycles)")
     args = parser.parse_args()
 

@@ -38,8 +38,99 @@
       "status": "open",
       "timestamp": "08:20:54",
       "strategy": "momentum"
+    },
+    {
+      "id": "trade_082155",
+      "symbol": "JUP",
+      "direction": "BUY",
+      "entry_price": 0.1606,
+      "exit_price": null,
+      "size": 20,
+      "pnl": null,
+      "pnl_pct": null,
+      "status": "open",
+      "timestamp": "08:21:55",
+      "strategy": "momentum"
+    },
+    {
+      "id": "trade_082155",
+      "symbol": "RAY",
+      "direction": "BUY",
+      "entry_price": 0.6406,
+      "exit_price": null,
+      "size": 20,
+      "pnl": null,
+      "pnl_pct": null,
+      "status": "open",
+      "timestamp": "08:21:55",
+      "strategy": "momentum"
+    },
+    {
+      "id": "trade_082155",
+      "symbol": "SOL",
+      "direction": "BUY",
+      "entry_price": 0.02325,
+      "exit_price": null,
+      "size": 20,
+      "pnl": null,
+      "pnl_pct": null,
+      "status": "open",
+      "timestamp": "08:21:55",
+      "strategy": "momentum"
+    },
+    {
+      "id": "trade_082155",
+      "symbol": "BONK",
+      "direction": "BUY",
+      "entry_price": 6.604e-06,
+      "exit_price": null,
+      "size": 20,
+      "pnl": null,
+      "pnl_pct": null,
+      "status": "open",
+      "timestamp": "08:21:55",
+      "strategy": "momentum"
+    },
+    {
+      "id": "trade_082256",
+      "symbol": "JUP",
+      "direction": "BUY",
+      "entry_price": 0.1606,
+      "exit_price": null,
+      "size": 20,
+      "pnl": null,
+      "pnl_pct": null,
+      "status": "open",
+      "timestamp": "08:22:56",
+      "strategy": "momentum"
+    },
+    {
+      "id": "trade_082256",
+      "symbol": "RAY",
+      "direction": "BUY",
+      "entry_price": 0.6396,
+      "exit_price": null,
+      "size": 20,
+      "pnl": null,
+      "pnl_pct": null,
+      "status": "open",
+      "timestamp": "08:22:56",
+      "strategy": "momentum"
+    },
+    {
+      "id": "trade_082256",
+      "symbol": "BONK",
+      "direction": "BUY",
+      "entry_price": 6.591e-06,
+      "exit_price": null,
+      "size": 20,
+      "pnl": null,
+      "pnl_pct": null,
+      "status": "open",
+      "timestamp": "08:22:56",
+      "strategy": "momentum"
     }
   ],
   "tokens": {},
-  "last_update": "2026-02-14T08:20:54.224165"
+  "last_update": "2026-02-14T08:22:56.539923"
 }

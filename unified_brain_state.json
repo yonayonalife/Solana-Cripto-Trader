@@ -1,17 +1,18 @@
 {
-  "brain": "unified",
-  "version": "1.0",
+  "brain": "unified_v2",
+  "version": "2.0",
   "modules": {
     "websocket": true,
     "jito": true,
     "database": true,
+    "ml_signals": true,
     "scout": true,
     "optimizer": true
   },
-  "timestamp": "2026-02-14T08:20:54.224874",
+  "timestamp": "2026-02-14T08:27:53.703601",
   "stats": {
     "cycles": 1,
-    "trades_today": 3,
+    "trades_today": 0,
     "daily_pnl_pct": 0,
     "total_pnl": 0,
     "iterations": 1
