@@ -1,13 +1,13 @@
 {
   "team_status": "active",
-  "timestamp": "2026-02-14T07:49:00.888422",
+  "timestamp": "2026-02-14T08:06:42.084506",
   "trader": {
-    "trades_today": 6,
+    "trades_today": 10,
     "daily_pnl_pct": 0,
-    "open_positions": 6
+    "open_positions": 10
   },
   "optimizer": {
-    "iterations": 4,
+    "iterations": 38,
     "total_pnl": 0
   }
 }
