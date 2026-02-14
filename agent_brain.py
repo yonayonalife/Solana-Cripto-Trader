@@ -783,6 +783,16 @@ class DeploymentAgent:
         approved = approved[:3]
 
         if approved:
+            # Check for manual override flag
+            try:
+                with open(ACTIVE_STRATEGIES_FILE, "r") as f:
+                    existing = json.load(f)
+                if existing.get("manual_override", False):
+                    logger.info("[Deploy] Skipping - manual override active")
+                    return {"deployed": len(self.deployed), "strategies": self.deployed}
+            except:
+                pass
+            
             # Write for agent_runner.py to consume
             deploy_data = {
                 "deployed_at": datetime.now().isoformat(),
