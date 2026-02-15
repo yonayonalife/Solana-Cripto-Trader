@@ -1,20 +1,90 @@
 {
-  "team_status": "active",
-  "version": "2.0",
-  "modules": {
-    "websocket": true,
-    "jito": true,
-    "database": true
+  "enabled": true,
+  "start_time": "2026-02-15T08:45:16.351461",
+  "balance_usd": 427.81643138757335,
+  "initial_balance": 500.0,
+  "trades": [
+    {
+      "id": "paper_20260215_084552",
+      "entry_time": "2026-02-15T08:45:52.640384",
+      "entry_price": 100,
+      "direction": "bullish",
+      "size": 25.49475,
+      "symbol": "PUMPID",
+      "status": "open",
+      "exit_time": null,
+      "exit_price": null,
+      "pnl": 0.0,
+      "pnl_pct": 0.0,
+      "reason": "Trending token; ML Score: 11%"
+    },
+    {
+      "id": "paper_20260215_084552",
+      "entry_time": "2026-02-15T08:45:52.685933",
+      "entry_price": 100,
+      "direction": "bullish",
+      "size": 23.208289030125,
+      "symbol": "RENDER",
+      "status": "open",
+      "exit_time": null,
+      "exit_price": null,
+      "pnl": 0.0,
+      "pnl_pct": 0.0,
+      "reason": "Trending token; ML Score: 9%"
+    },
+    {
+      "id": "paper_20260215_084552",
+      "entry_time": "2026-02-15T08:45:52.731180",
+      "entry_price": 100,
+      "direction": "bullish",
+      "size": 23.480529582301624,
+      "symbol": "UNTIL",
+      "status": "open",
+      "exit_time": null,
+      "exit_price": null,
+      "pnl": 0.0,
+      "pnl_pct": 0.0,
+      "reason": "Trending token; ML Score: 12%"
+    }
+  ],
+  "stats": {
+    "total_trades": 0,
+    "winning_trades": 0,
+    "losing_trades": 0,
+    "total_pnl": 0.0,
+    "win_rate": 0.0,
+    "max_drawdown": 0.0,
+    "current_streak": 0,
+    "best_streak": 0,
+    "worst_streak": 0
   },
-  "timestamp": "2026-02-14T08:20:41.634707",
-  "trader": {
-    "trades_today": 15,
-    "daily_pnl_pct": 0,
-    "open_positions": 15
-  },
-  "optimizer": {
-    "iterations": 20,
-    "total_pnl": 0,
-    "best_strategy": "momentum"
-  }
+  "signals": [
+    {
+      "time": "2026-02-15T08:45:52.640384",
+      "symbol": "PUMPID",
+      "direction": "bullish",
+      "price": 100,
+      "size": 25.49475,
+      "reason": "Trending token; ML Score: 11%",
+      "trade_id": "paper_20260215_084552"
+    },
+    {
+      "time": "2026-02-15T08:45:52.685933",
+      "symbol": "RENDER",
+      "direction": "bullish",
+      "price": 100,
+      "size": 23.208289030125,
+      "reason": "Trending token; ML Score: 9%",
+      "trade_id": "paper_20260215_084552"
+    },
+    {
+      "time": "2026-02-15T08:45:52.731180",
+      "symbol": "UNTIL",
+      "direction": "bullish",
+      "price": 100,
+      "size": 23.480529582301624,
+      "reason": "Trending token; ML Score: 12%",
+      "trade_id": "paper_20260215_084552"
+    }
+  ]
 }

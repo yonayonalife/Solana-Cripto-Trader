@@ -823,19 +823,48 @@ class UnifiedTradingSystem:
         logger.info(f"🌱 Seeded {len(seed_data)} tokens with price history")
     
     def get_hardbit_profile(self) -> Dict:
-        """Get active HARDBIT profile based on time"""
-        profile = get_active_profile()
+        """
+        Get active risk profile - NOW USES DYNAMIC LIMITS from RiskAgent!
+        
+        The agents decide the risk parameters based on:
+        - Win rate (recent performance)
+        - Signal confidence
+        - Daily P&L
+        """
+        # First get HARDBIT base profile (time-based)
+        base_profile = get_active_profile()
         is_night = is_night_time()
+        
+        # Get win rate from recent trades
+        stats = self.paper_engine.state.stats
+        win_rate = stats.get("win_rate", 0.5) if stats.get("total_trades", 0) > 0 else 0.5
+        
+        # Get recent signal confidence
+        recent_confidence = 0.5
+        if self.paper_engine.state.signals:
+            recent_signals = self.paper_engine.state.signals[-5:]
+            if recent_signals:
+                confidences = [s.get("confidence", 50) for s in recent_signals]
+                recent_confidence = sum(confidences) / len(confidences) / 100
+        
+        # Get dynamic limits from RiskAgent - AGENTS DECIDE!
+        dynamic_limits = self.risk_agent.get_dynamic_limits(win_rate, recent_confidence)
+        
+        logger.info(f"🧠 Dynamic Risk: {dynamic_limits['reason']}")
         
         return {
             "is_night": is_night,
-            "profile": profile,
-            "max_position_pct": profile.get("max_position_pct", 0.10),
-            "stop_loss_pct": profile.get("stop_loss_pct", 0.03),
-            "take_profit_pct": profile.get("take_profit_pct", 0.06),
-            "max_daily_loss_pct": profile.get("max_daily_loss_pct", 0.10),
-            "max_concurrent": profile.get("max_concurrent_positions", 5),
-            "cooldown_seconds": profile.get("cooldown_seconds", 60)
+            "mode": "DYNAMIC (Agent Decision)",
+            "profile": base_profile,
+            "max_position_pct": dynamic_limits["position_pct"],
+            "stop_loss_pct": dynamic_limits["stop_loss_pct"],
+            "take_profit_pct": dynamic_limits["take_profit_pct"],
+            "max_daily_loss_pct": base_profile.get("max_daily_loss_pct", 0.10),
+            "max_concurrent": dynamic_limits["max_concurrent"],
+            "cooldown_seconds": base_profile.get("cooldown_seconds", 60),
+            "dynamic_reason": dynamic_limits["reason"],
+            "win_rate": win_rate,
+            "signal_confidence": recent_confidence
         }
     
     def calculate_position_size(

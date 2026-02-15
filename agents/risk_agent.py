@@ -199,6 +199,105 @@ class RiskAgent:
             "recommendations": self._get_risk_recommendations(risk_level)
         }
     
+    def get_dynamic_limits(self, win_rate: float = 0.5, confidence: float = 0.5) -> Dict:
+        """
+        Dynamically adjust risk limits based on performance and conditions.
+        
+        This is where the AGENTS decide the risk parameters, not hardcoded schedule!
+        
+        Args:
+            win_rate: Recent win rate (0-1)
+            confidence: Signal confidence (0-1)
+            
+        Returns:
+            Dict with adjusted risk parameters
+        """
+        # Base limits
+        position_pct = self.limits.max_position_pct
+        stop_loss_pct = 0.03
+        take_profit_pct = 0.06
+        max_concurrent = self.limits.max_concurrent_trades
+        
+        # Calculate performance factor
+        performance_factor = win_rate  # 0.5 = neutral, 1.0 = excellent, 0.0 = terrible
+        
+        # Adjust based on win rate
+        if win_rate >= 0.7:
+            # Great performance - be more aggressive
+            position_pct = min(0.20, position_pct * 1.3)
+            stop_loss_pct = 0.02  # Tighter SL
+            take_profit_pct = 0.05  # Take profit sooner
+            max_concurrent = min(8, max_concurrent + 2)
+        elif win_rate >= 0.5:
+            # Good performance - stay normal
+            pass
+        elif win_rate >= 0.3:
+            # Poor performance - be more conservative
+            position_pct = position_pct * 0.7
+            stop_loss_pct = 0.05  # Wider SL
+            take_profit_pct = 0.08  # Wait for bigger TP
+            max_concurrent = max(2, max_concurrent - 1)
+        else:
+            # Terrible performance - minimal risk
+            position_pct = 0.05
+            stop_loss_pct = 0.08
+            take_profit_pct = 0.10
+            max_concurrent = 1
+        
+        # Adjust based on signal confidence
+        if confidence >= 0.7:
+            # High confidence - trust the signal
+            position_pct = position_pct * 1.2
+        elif confidence < 0.3:
+            # Low confidence - reduce exposure
+            position_pct = position_pct * 0.5
+        
+        # Adjust based on daily P&L
+        if self.daily_pnl < 0:
+            loss_pct = abs(self.daily_pnl) / self.daily_start_balance
+            if loss_pct > 0.05:
+                # Losing money - reduce risk
+                position_pct = position_pct * 0.5
+                stop_loss_pct = stop_loss_pct * 1.5
+            if loss_pct > 0.08:
+                # Near daily limit - be very careful
+                position_pct = 0.03
+                max_concurrent = 1
+        elif self.daily_pnl > 0:
+            # Winning - can take more risk
+            profit_pct = self.daily_pnl / self.daily_start_balance
+            if profit_pct > 0.05:
+                position_pct = position_pct * 1.2
+        
+        return {
+            "position_pct": round(position_pct, 3),
+            "stop_loss_pct": round(stop_loss_pct, 3),
+            "take_profit_pct": round(take_profit_pct, 3),
+            "max_concurrent": max_concurrent,
+            "reason": self._get_adjustment_reason(win_rate, confidence)
+        }
+    
+    def _get_adjustment_reason(self, win_rate: float, confidence: float) -> str:
+        """Explain why limits were adjusted"""
+        reasons = []
+        
+        if win_rate >= 0.7:
+            reasons.append("Good win rate")
+        elif win_rate < 0.3:
+            reasons.append("Poor win rate")
+        
+        if confidence >= 0.7:
+            reasons.append("High confidence")
+        elif confidence < 0.3:
+            reasons.append("Low confidence")
+        
+        if self.daily_pnl < -self.daily_start_balance * 0.05:
+            reasons.append("Daily loss")
+        elif self.daily_pnl > self.daily_start_balance * 0.05:
+            reasons.append("Daily profit")
+        
+        return ", ".join(reasons) if reasons else "Normal conditions"
+    
     def _get_risk_recommendations(self, risk_level: str) -> List[str]:
         """Get recommendations based on risk level"""
         if risk_level == "LOW":

@@ -1,0 +1,218 @@
+{
+  "daily_pnl": 3.2281302910808813,
+  "daily_trades": 35,
+  "daily_start_balance": 500.0,
+  "open_trades": [
+    {
+      "id": "trade_20260215_080851",
+      "symbol": "JUP",
+      "size": 38.53575,
+      "direction": "bearish"
+    },
+    {
+      "id": "trade_20260215_080851",
+      "symbol": "Buttcoin",
+      "size": 26.626025760749997,
+      "direction": "bullish"
+    },
+    {
+      "id": "trade_20260215_080929",
+      "symbol": "TRUMP",
+      "size": 28.2825,
+      "direction": "bullish"
+    },
+    {
+      "id": "trade_20260215_080929",
+      "symbol": "JUP",
+      "size": 35.553583833750004,
+      "direction": "bearish"
+    },
+    {
+      "id": "trade_20260215_080929",
+      "symbol": "JUICE",
+      "size": 24.094567056855983,
+      "direction": "bearish"
+    },
+    {
+      "id": "trade_20260215_081116",
+      "symbol": "TRUMP",
+      "size": 28.6605,
+      "direction": "bullish"
+    },
+    {
+      "id": "trade_20260215_081216",
+      "symbol": "JUP",
+      "size": 35.124219540000006,
+      "direction": "bearish"
+    },
+    {
+      "id": "trade_20260215_081317",
+      "symbol": "TRUMP",
+      "size": 25.004296091247657,
+      "direction": "bullish"
+    },
+    {
+      "id": "trade_20260215_081522",
+      "symbol": "TRUMP",
+      "size": 28.2825,
+      "direction": "bullish"
+    },
+    {
+      "id": "trade_20260215_081522",
+      "symbol": "Fartcoin",
+      "size": 24.542989807499996,
+      "direction": "bullish"
+    },
+    {
+      "id": "trade_20260215_081522",
+      "symbol": "JUP",
+      "size": 33.069896552265945,
+      "direction": "bearish"
+    },
+    {
+      "id": "trade_20260215_081622",
+      "symbol": "Fartcoin",
+      "size": 22.26443474214443,
+      "direction": "bullish"
+    },
+    {
+      "id": "trade_20260215_081723",
+      "symbol": "Fartcoin",
+      "size": 23.46318920189199,
+      "direction": "bullish"
+    },
+    {
+      "id": "trade_20260215_081828",
+      "symbol": "TRUMP",
+      "size": 27.432,
+      "direction": "bullish"
+    },
+    {
+      "id": "trade_20260215_081828",
+      "symbol": "Buttcoin",
+      "size": 25.435736315999996,
+      "direction": "bearish"
+    },
+    {
+      "id": "trade_20260215_081828",
+      "symbol": "PENGU",
+      "size": 23.263844547214838,
+      "direction": "bearish"
+    },
+    {
+      "id": "trade_20260215_082531",
+      "symbol": "Fartcoin",
+      "size": 26.4389198727409,
+      "direction": "bullish"
+    },
+    {
+      "id": "trade_20260215_082531",
+      "symbol": "USELESS",
+      "size": 27.509245955952498,
+      "direction": "bearish"
+    },
+    {
+      "id": "trade_20260215_082531",
+      "symbol": "UNTIL",
+      "size": 23.422325927630542,
+      "direction": "bearish"
+    },
+    {
+      "id": "trade_20260215_083133",
+      "symbol": "TRUMP",
+      "size": 21.494473014575814,
+      "direction": "bullish"
+    },
+    {
+      "id": "trade_20260215_083152",
+      "symbol": "Fartcoin",
+      "size": 23.7465,
+      "direction": "bearish"
+    },
+    {
+      "id": "trade_20260215_083152",
+      "symbol": "HYPE",
+      "size": 26.9392792275,
+      "direction": "bearish"
+    },
+    {
+      "id": "trade_20260215_083152",
+      "symbol": "UNTIL",
+      "size": 24.184113275969423,
+      "direction": "bearish"
+    },
+    {
+      "id": "trade_20260215_083441",
+      "symbol": "UNTIL",
+      "size": 24.786,
+      "direction": "bullish"
+    },
+    {
+      "id": "trade_20260215_083441",
+      "symbol": "PUMPID",
+      "size": 24.724909206,
+      "direction": "bullish"
+    },
+    {
+      "id": "trade_20260215_083541",
+      "symbol": "TRUMP",
+      "size": 24.545348601001884,
+      "direction": "bullish"
+    },
+    {
+      "id": "trade_20260215_083842",
+      "symbol": "USELESS",
+      "size": 24.347097830070958,
+      "direction": "bullish"
+    },
+    {
+      "id": "trade_20260215_083842",
+      "symbol": "HYPE",
+      "size": 24.21902944934137,
+      "direction": "bullish"
+    },
+    {
+      "id": "trade_20260215_083942",
+      "symbol": "USELESS",
+      "size": 23.156814124147758,
+      "direction": "bearish"
+    },
+    {
+      "id": "trade_20260215_084343",
+      "symbol": "USELESS",
+      "size": 27.62123324367053,
+      "direction": "bearish"
+    },
+    {
+      "id": "trade_20260215_084344",
+      "symbol": "PUMPID",
+      "size": 23.587740656441564,
+      "direction": "bearish"
+    },
+    {
+      "id": "trade_20260215_084344",
+      "symbol": "RENDER",
+      "size": 26.093804951218893,
+      "direction": "bullish"
+    },
+    {
+      "id": "trade_20260215_084552",
+      "symbol": "PUMPID",
+      "size": 25.49475,
+      "direction": "bullish"
+    },
+    {
+      "id": "trade_20260215_084552",
+      "symbol": "RENDER",
+      "size": 23.208289030125,
+      "direction": "bullish"
+    },
+    {
+      "id": "trade_20260215_084552",
+      "symbol": "UNTIL",
+      "size": 23.480529582301624,
+      "direction": "bullish"
+    }
+  ],
+  "last_update": "2026-02-15T08:45:52.731816"
+}
