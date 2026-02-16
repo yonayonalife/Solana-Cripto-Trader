@@ -1,6 +1,6 @@
 {
   "daily_pnl": 0.0,
-  "daily_trades": 10,
+  "daily_trades": 12,
   "daily_start_balance": 500.0,
   "open_trades": [
     {
@@ -62,7 +62,19 @@
       "symbol": "ORCA",
       "size": 22.25335479308207,
       "direction": "bearish"
+    },
+    {
+      "id": "trade_20260216_073758_cd6b",
+      "symbol": "JTO",
+      "size": 27.76275,
+      "direction": "bullish"
+    },
+    {
+      "id": "trade_20260216_073758_cb5e",
+      "symbol": "JUP",
+      "size": 25.551813123,
+      "direction": "bullish"
     }
   ],
-  "last_update": "2026-02-15T18:51:15.126654"
+  "last_update": "2026-02-16T07:37:58.893446"
 }

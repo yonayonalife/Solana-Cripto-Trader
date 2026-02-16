@@ -1,9 +1,38 @@
 {
   "enabled": true,
   "start_time": "2026-02-15T14:55:00",
-  "balance_usd": 500.0,
+  "balance_usd": 446.68543687700003,
   "initial_balance": 500.0,
-  "trades": [],
+  "trades": [
+    {
+      "id": "trade_20260216_073758_1555",
+      "entry_time": "2026-02-16T07:37:58.825631",
+      "entry_price": 0.2665,
+      "direction": "bullish",
+      "size": 27.76275,
+      "symbol": "JTO",
+      "status": "open",
+      "exit_time": null,
+      "exit_price": null,
+      "pnl": 0.0,
+      "pnl_pct": 0.0,
+      "reason": "High volume: 1.5x normal; ML Score: 16%"
+    },
+    {
+      "id": "trade_20260216_073758_d39c",
+      "entry_time": "2026-02-16T07:37:58.892682",
+      "entry_price": 0.1609,
+      "direction": "bullish",
+      "size": 25.551813123,
+      "symbol": "JUP",
+      "status": "open",
+      "exit_time": null,
+      "exit_price": null,
+      "pnl": 0.0,
+      "pnl_pct": 0.0,
+      "reason": "High volume: 1.5x normal; ML Score: 14%"
+    }
+  ],
   "stats": {
     "total_trades": 0,
     "winning_trades": 0,
@@ -105,6 +134,24 @@
       "size": 22.25335479308207,
       "reason": "High volume: 1.5x normal; ML Score: 15%",
       "trade_id": "trade_20260215_185115_4bd8"
+    },
+    {
+      "time": "2026-02-16T07:37:58.825631",
+      "symbol": "JTO",
+      "direction": "bullish",
+      "price": 0.2665,
+      "size": 27.76275,
+      "reason": "High volume: 1.5x normal; ML Score: 16%",
+      "trade_id": "trade_20260216_073758_1555"
+    },
+    {
+      "time": "2026-02-16T07:37:58.892682",
+      "symbol": "JUP",
+      "direction": "bullish",
+      "price": 0.1609,
+      "size": 25.551813123,
+      "reason": "High volume: 1.5x normal; ML Score: 14%",
+      "trade_id": "trade_20260216_073758_d39c"
     }
   ]
 }

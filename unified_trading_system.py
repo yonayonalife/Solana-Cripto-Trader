@@ -1354,7 +1354,7 @@ class UnifiedTradingSystem:
         
         # Save state after every cycle to prevent data loss on crash
         try:
-            self.paper_engine.save_state()
+            self.paper_engine._save_state()
             self._save_state()
         except Exception as e:
             logger.warning(f"Failed to save state: {e}")
