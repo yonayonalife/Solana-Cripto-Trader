@@ -1,6 +1,6 @@
 {
   "daily_pnl": 0.0,
-  "daily_trades": 5,
+  "daily_trades": 10,
   "daily_start_balance": 500.0,
   "open_trades": [
     {
@@ -32,7 +32,37 @@
       "symbol": "USDC",
       "size": 24.761459515045985,
       "direction": "bullish"
+    },
+    {
+      "id": "trade_20260215_184929_f390",
+      "symbol": "BONK",
+      "size": 30.69,
+      "direction": "bearish"
+    },
+    {
+      "id": "trade_20260215_184929_37fd",
+      "symbol": "PUMP",
+      "size": 29.15119065,
+      "direction": "bearish"
+    },
+    {
+      "id": "trade_20260215_184929_cc39",
+      "symbol": "JTO",
+      "size": 39.3105832630485,
+      "direction": "bullish"
+    },
+    {
+      "id": "trade_20260215_185115_5208",
+      "symbol": "JTO",
+      "size": 35.799755071825636,
+      "direction": "bullish"
+    },
+    {
+      "id": "trade_20260215_185115_223a",
+      "symbol": "ORCA",
+      "size": 22.25335479308207,
+      "direction": "bearish"
     }
   ],
-  "last_update": "2026-02-15T14:55:16.657043"
+  "last_update": "2026-02-15T18:51:15.126654"
 }

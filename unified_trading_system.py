@@ -40,6 +40,8 @@ from pathlib import Path
 import sqlite3
 import json
 import time as time_module
+import gc
+import tracemalloc
 
 # Add project root
 PROJECT_ROOT = Path(__file__).parent
@@ -304,7 +306,7 @@ class MLSignalGenerator:
     def __init__(self, cache_manager: RedisCacheManager):
         self.cache = cache_manager
         self.price_history: Dict[str, List[float]] = {}
-        self.history_length = 50  # Keep 50 price points
+        self.history_length = 20  # Keep only 20 price points to save memory
     
     def update_price(self, symbol: str, price: float):
         """Update price history"""
@@ -789,7 +791,7 @@ class UnifiedTradingSystem:
         self.scanner = MarketScannerAgent()
         self.paper_engine = PaperTradingEngine()
         self.db = TradesDatabase()
-        # self.ml_signal = MLSignalGenerator(self.cache) # Disabled
+        self.ml_signal = MLSignalGenerator(self.cache)
         
         # Initialize Strategy Optimizer - DISABLED due to memory leak
         # try:
@@ -800,11 +802,11 @@ class UnifiedTradingSystem:
         #     logger.warning(f"⚠️ Strategy Optimizer not available: {e}")
         self.optimizer = None
         
-        # Trading tokens (reduced to 5)
-        self.trading_tokens = ["SOL", "BTC", "ETH", "WIF", "PUMP"]
+        # Trading tokens (reduced to 3 for memory efficiency)
+        self.trading_tokens = ["SOL", "BTC", "ETH"]
         
         # Seed price data for initial ML signals
-        # self._seed_initial_prices() # Disabled
+        self._seed_initial_prices()
         
         # State
         self.running = False
@@ -817,16 +819,11 @@ class UnifiedTradingSystem:
     
     def _seed_initial_prices(self):
         """Seed initial price data for ML signals"""
-        # Seed with realistic upward trends to generate signals
+        # Seed with minimal price data for ML signals
         seed_data = {
-            'SOL': [80, 82, 84, 86, 88, 90, 92, 94, 96, 98, 100, 102, 104, 106, 108],
-            'WIF': [2.0, 2.2, 2.4, 2.6, 2.8, 3.0, 3.2, 3.4, 3.6],
-            'JUP': [0.70, 0.75, 0.80, 0.85, 0.90, 0.95, 1.0, 1.05, 1.10],
-            'ETH': [1800, 1820, 1840, 1860, 1880, 1900, 1920, 1940, 1960],
-            'BTC': [82000, 83000, 84000, 85000, 86000, 87000, 88000, 89000, 90000],
-            'RAY': [0.40, 0.42, 0.44, 0.46, 0.48, 0.50, 0.52, 0.54],
-            'JTO': [1.10, 1.15, 1.20, 1.25, 1.30, 1.35, 1.40],
-            'BONK': [0.000020, 0.000022, 0.000024, 0.000026, 0.000028, 0.000030],
+            'SOL': [80, 82, 84, 86, 88, 90, 92, 94],
+            'ETH': [1800, 1820, 1840, 1860, 1880, 1900, 1920, 1940],
+            'BTC': [82000, 83000, 84000, 85000, 86000, 87000, 88000, 89000],
         }
         
         for symbol, prices in seed_data.items():
@@ -1304,7 +1301,7 @@ class UnifiedTradingSystem:
         opportunities = self.scan_market()
         
         # 2. Generate ML signals
-        signals = []  # Disabled
+        signals = self.generate_ml_signals(opportunities)
         
         # 3. Process high-confidence signals
         for signal in signals:
@@ -1351,6 +1348,16 @@ class UnifiedTradingSystem:
         self._run_optimizer_if_needed()
         
         logger.info("✅ Trading cycle complete")
+        
+        # Force garbage collection to prevent memory leak
+        gc.collect()
+        
+        # Save state after every cycle to prevent data loss on crash
+        try:
+            self.paper_engine.save_state()
+            self._save_state()
+        except Exception as e:
+            logger.warning(f"Failed to save state: {e}")
     
     def _check_open_positions(self):
         """Check open positions for stop loss / take profit"""
