@@ -1538,13 +1538,22 @@ class UnifiedTradingSystem:
         
         # Don't call self.start() here - it's already called in main()
         
+        import time as time_lib
+        
+        logger.info("🔄 Starting continuous loop...")
+        loop_count = 0
         while self.running:
+            loop_count += 1
             try:
+                logger.info(f"Cycle {loop_count} starting...")
                 self.run_cycle()
+                logger.info(f"Cycle {loop_count} complete, sleeping {self.scan_interval}s...")
                 time_module.sleep(self.scan_interval)
             except Exception as e:
                 logger.error(f"Error in trading cycle: {e}")
                 time_module.sleep(5)  # Wait before retry
+        
+        logger.info("🛑 Exiting continuous loop")
 
 
 # =============================================================================
