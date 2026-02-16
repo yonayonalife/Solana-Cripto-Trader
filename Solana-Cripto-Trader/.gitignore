@@ -1,0 +1,46 @@
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# Secrets
+*.pem
+*.key
+.env.backup
+.env.save
+
+# State files (runtime generated)
+agent_state.json
+brain_state.json
+data/active_strategies.json
+data/optimized_strategies.json
+data/accumulation_target.json
+data/token_watchlist.json
+data/knowledge/
+data/*.csv
+data/*.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+venv/
+.venv/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Keys wallets (NUNCA en git)
+config/mainnet_wallet.json
+config/*wallet*.json
