@@ -18,6 +18,7 @@ Usage:
     python3 unified_brain.py --status   # Check status
 """
 
+import os
 import json
 import asyncio
 import httpx
@@ -29,6 +30,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional
 from dataclasses import dataclass, asdict
+from dotenv import load_dotenv
+
+load_dotenv(Path(__file__).parent / ".env")
 
 # Import modules
 from api.websocket_client import WebSocketSimulator
@@ -369,6 +373,76 @@ class RiskManager:
         return True
 
 
+class TelegramNotifier:
+    """Sends trade notifications to Telegram."""
+
+    def __init__(self):
+        self.token = os.getenv("TELEGRAM_BOT_TOKEN", "")
+        self.chat_id = os.getenv("TELEGRAM_CHAT_ID", "")
+        self.enabled = bool(self.token and self.chat_id)
+
+    async def send(self, message: str):
+        """Send a message to Telegram."""
+        if not self.enabled:
+            return
+        try:
+            async with httpx.AsyncClient() as client:
+                await client.post(
+                    f"https://api.telegram.org/bot{self.token}/sendMessage",
+                    data={"chat_id": self.chat_id, "text": message, "parse_mode": "HTML"},
+                    timeout=10,
+                )
+        except Exception:
+            pass
+
+    async def notify_trade_open(self, trade, signal: Dict):
+        """Notify when a trade is opened."""
+        msg = (
+            f"<b>NEW TRADE OPENED</b>\n"
+            f"{'BUY' if trade.direction == 'BUY' else 'SELL'} <b>{trade.symbol}</b>\n"
+            f"Price: ${trade.entry_price:.6f}\n"
+            f"Size: ${trade.size}\n"
+            f"Confidence: {signal['confidence']:.0%}\n"
+            f"Reason: {signal['reason']}\n"
+            f"Time: {trade.time}"
+        )
+        await self.send(msg)
+
+    async def notify_trade_close(self, trade, total_pnl: float, balance: float, win_rate: float):
+        """Notify when a trade is closed."""
+        emoji = "+" if trade.pnl_pct >= 0 else ""
+        result = "WIN" if trade.pnl_pct >= 0 else "LOSS"
+        msg = (
+            f"<b>TRADE CLOSED - {result}</b>\n"
+            f"{'BUY' if trade.direction == 'BUY' else 'SELL'} <b>{trade.symbol}</b>\n"
+            f"Entry: ${trade.entry_price:.6f}\n"
+            f"Exit: ${trade.current_price:.6f}\n"
+            f"P&L: {emoji}{trade.pnl_pct:.2f}% (${trade.pnl_value:+.2f})\n\n"
+            f"<b>PORTFOLIO</b>\n"
+            f"Total P&L: ${total_pnl:.2f}\n"
+            f"Balance: ${balance:.2f}\n"
+            f"Win Rate: {win_rate:.1f}%"
+        )
+        await self.send(msg)
+
+    async def notify_cycle_summary(self, cycle: int, open_trades: List, total_pnl: float, balance: float):
+        """Send periodic summary every 10 cycles."""
+        if not open_trades:
+            return
+        positions = "\n".join(
+            f"  {'G' if t.pnl_pct >= 0 else 'L'} {t.symbol}: {t.pnl_pct:+.2f}%"
+            for t in open_trades
+        )
+        msg = (
+            f"<b>CYCLE {cycle} SUMMARY</b>\n"
+            f"Open positions: {len(open_trades)}\n"
+            f"{positions}\n\n"
+            f"Total P&L: ${total_pnl:.2f}\n"
+            f"Balance: ${balance:.2f}"
+        )
+        await self.send(msg)
+
+
 class UnifiedBrain:
     """Unified brain combining all components."""
 
@@ -389,9 +463,11 @@ class UnifiedBrain:
         self.optimizer = StrategyOptimizer()
         self.trader = Trader(self.jito, self.ml)
         self.risk = RiskManager()
+        self.telegram = TelegramNotifier()
 
         self.running = False
         self.cycle_count = 0
+        self._previously_closed = set()
 
     async def run_cycle(self):
         """Run one complete cycle."""
@@ -431,6 +507,7 @@ class UnifiedBrain:
                     if trade:
                         print(f"   ✅ {trade.direction} {trade.symbol} @ ${trade.entry_price:.4f}")
                         print(f"      Confidence: {signal['confidence']:.0%} | {signal['reason']}")
+                        await self.telegram.notify_trade_open(trade, signal)
 
                         # Save to database
                         db_trade = DBTrade(
@@ -452,6 +529,17 @@ class UnifiedBrain:
         prices = {opp["symbol"]: opp["price"] for opp in opportunities}
         self.trader.update_prices(prices)
 
+        # 4b. Detect newly closed trades and notify
+        closed = [t for t in self.trader.trades if t.status == "closed"]
+        for trade in closed:
+            if trade.id not in self._previously_closed:
+                self._previously_closed.add(trade.id)
+                total_pnl = sum(t.pnl_value for t in closed)
+                balance = INITIAL_CAPITAL + total_pnl
+                wins = sum(1 for t in closed if t.pnl_pct > 0)
+                win_rate = wins / len(closed) * 100 if closed else 0
+                await self.telegram.notify_trade_close(trade, total_pnl, balance, win_rate)
+
         # 5. Optimizer analyzes
         print("\n🧠 OPTIMIZER: Analyzing...")
         analysis = self.optimizer.analyze(self.trader.trades)
@@ -460,7 +548,6 @@ class UnifiedBrain:
         print(f"   Threshold: {analysis['params']['threshold']:.2f}")
 
         # 6. Progress
-        closed = [t for t in self.trader.trades if t.status == "closed"]
         daily_pnl = sum(t.pnl_pct for t in closed)
         target = DAILY_TARGET_PCT * 100
 
@@ -469,11 +556,17 @@ class UnifiedBrain:
         print(f"   ML Signals: {len(ml_signals)}")
 
         # 7. Open positions
+        open_trades = [t for t in self.trader.trades if t.status == "open"]
         print(f"\n📋 OPEN POSITIONS:")
-        for trade in self.trader.trades:
-            if trade.status == "open":
-                emoji = "🟢" if trade.pnl_pct >= 0 else "🔴"
-                print(f"   {emoji} {trade.symbol}: {trade.pnl_pct:+.2f}%")
+        for trade in open_trades:
+            emoji = "🟢" if trade.pnl_pct >= 0 else "🔴"
+            print(f"   {emoji} {trade.symbol}: {trade.pnl_pct:+.2f}%")
+
+        # 8. Telegram summary every 10 cycles
+        if self.cycle_count % 10 == 0 and open_trades:
+            total_pnl = sum(t.pnl_value for t in closed)
+            balance = INITIAL_CAPITAL + total_pnl
+            await self.telegram.notify_cycle_summary(self.cycle_count, open_trades, total_pnl, balance)
 
         return {
             "opportunities": len(opportunities),

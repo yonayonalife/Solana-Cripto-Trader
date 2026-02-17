@@ -79,6 +79,9 @@ class PaperTradingEngine:
         """Load state from file."""
         if PAPER_STATE_FILE.exists():
             data = json.loads(PAPER_STATE_FILE.read_text())
+            # Remove unknown keys
+            known_keys = {"enabled", "start_time", "balance_usd", "initial_balance", "trades", "stats", "signals"}
+            data = {k: v for k, v in data.items() if k in known_keys}
             # Convert datetime strings back
             if data.get("start_time"):
                 data["start_time"] = datetime.fromisoformat(data["start_time"])
