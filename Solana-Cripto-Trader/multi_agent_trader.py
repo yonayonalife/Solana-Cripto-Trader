@@ -400,34 +400,79 @@ Responde en JSON:
 
 
 class AdaptiveRiskManager:
-    """RiskManager con autoaprendizaje"""
+    """
+    RiskManager PRO con objetivo 5% diario
+    Auto-optimiza para rentabilidad
+    """
     def __init__(self):
-        self.max_pos = 6
+        # Límites
+        self.max_pos = 4  # Reducido para más control
         self.max_pos_per_cycle = 2
-        self.min_momentum = 0.8
-        self.max_capital_pct = 0.20
-        self.tp = 2.0  # 2% take profit
-        self.sl = 1.0  # 1% stop loss (risk)
-        self.last_entry_time = {}
-        self.cooldown_minutes = 3
+        self.min_momentum = 1.0  # Más estricto
+        self.max_capital_pct = 0.15  # 15% max en posiciones
         
-        # Autoaprendizaje
-        self.trade_history = []  # [ {"symbol": "SOL", "result": "TP" | "SL", "pnl": 1.5, "time": timestamp}]
-        self.learn_cycle = 10  # Analizar cada 10 trades
-        self.token_stats = {}  # { "SOL": {"wins": 3, "losses": 2, "avg_pnl": 1.2} }
-        self.best_params = {"tp": 1.5, "sl": 1.0}
+        # Parámetros base
+        self.tp = 2.5  # 2.5% take profit
+        self.sl = 1.0  # 1% stop loss
+        self.cooldown_minutes = 5  # 5 min cooldown
+        
+        # Autoaprendizaje avanzado
+        self.trade_history = []
+        self.learn_cycle = 5  # Analizar cada 5 trades (más frecuente)
+        self.token_stats = {}
+        
+        # Objetivos
+        self.daily_target = 5.0  # 5% diario
+        self.capital_start = 500  # Capital inicial del día
+        
+        # Métricas
+        self.best_params = {"tp": 2.5, "sl": 1.0}
         self.adaptive_enabled = True
     
+    def calculate_required_win_rate(self):
+        """
+        Calcula el win rate necesario para lograr 5% diario
+        """
+        # Para 5% con TP=2.5% y SL=1%:
+        # Profit = WR * 2.5 - (1-WR) * 1 = 5
+        # 2.5*WR - 1 + WR = 5
+        # 3.5*WR = 6
+        # WR = 6/3.5 = 71.4%
+        
+        required_wr = (self.daily_target + 100 * self.sl/100) / (100 * self.tp/100 + 100 * self.sl/100)
+        return required_wr * 100
+    
+    def optimal_position_size(self, win_rate, avg_win, avg_loss):
+        """
+        Calcula tamaño óptimo de posición usando Kelly Criterion
+        """
+        if win_rate >= 100 or win_rate <= 0:
+            return 0.02  # Default 2%
+        
+        # Kelly: f* = (bp - q) / b
+        # b = odds, p = win probability, q = loss probability
+        b = avg_win / avg_loss if avg_loss > 0 else 1
+        p = win_rate / 100
+        q = 1 - p
+        
+        kelly = (b * p - q) / b
+        
+        # Kelly fraccional (más conservador)
+        kelly = kelly * 0.25  # Usar solo 25% del Kelly
+        
+        # Bounds
+        return max(0.01, min(0.20, kelly))
+    
     def record_trade_result(self, symbol, result, pnl):
-        """Registra resultado de un trade para aprendizaje"""
+        """Registra resultado de un trade"""
         self.trade_history.append({
             "symbol": symbol,
-            "result": result,  # "TP" o "SL"
+            "result": result,
             "pnl": pnl,
             "time": import_time()
         })
         
-        # Actualizar stats por token
+        # Stats por token
         if symbol not in self.token_stats:
             self.token_stats[symbol] = {"wins": 0, "losses": 0, "total_pnl": 0}
         
@@ -438,64 +483,88 @@ class AdaptiveRiskManager:
             self.token_stats[symbol]["losses"] += 1
             self.token_stats[symbol]["total_pnl"] += pnl
         
-        # Feedback loop: analizar cada N trades
-        if len(self.trade_history) % self.learn_cycle == 0:
+        # Análisis frecuente
+        if len(self.trade_history) >= self.learn_cycle:
             self.analyze_and_adapt()
     
     def analyze_and_adapt(self):
-        """Analiza rendimiento y ajusta parámetros"""
-        print(f"\n🧠 [ADAPTIVE] Analizando últimos {len(self.trade_history)} trades...")
+        """Análisis PRO para optimizar profits"""
+        print(f"\n🧠 [ADAPTIVE PRO] Analizando para objetivo 5% diario...")
         
-        # Calcular win rate global
-        wins = sum(1 for t in self.trade_history[-self.learn_cycle:] if t["result"] == "TP")
-        total = self.learn_cycle
-        win_rate = wins / total * 100
+        # Obtener trades recientes
+        recent = self.trade_history[-self.learn_cycle:]
+        wins = [t for t in recent if t["result"] == "TP"]
+        losses = [t for t in recent if t["result"] == "SL"]
         
-        # Calcular PnL promedio
-        recent_pnl = sum(t["pnl"] for t in self.trade_history[-self.learn_cycle:])
+        win_rate = len(wins) / len(recent) * 100 if recent else 0
+        total_pnl = sum(t["pnl"] for t in recent)
         
-        print(f"   Win Rate: {win_rate:.1f}% | PnL: ${recent_pnl:.2f}")
+        avg_win = sum(t["pnl"] for t in wins) / len(wins) if wins else 0
+        avg_loss = sum(abs(t["pnl"]) for t in losses) / len(losses) if losses else 1
         
-        # AJUSTE 1: Si win rate < 40%, aumentar SL y reducir TP
+        print(f"   📊 Win Rate: {win_rate:.1f}% | PnL: ${total_pnl:.2f}")
+        
+        # Calcular posición óptima
+        optimal_size = self.optimal_position_size(win_rate, avg_win, avg_loss)
+        print(f"   💰 Tamaño óptimo: {optimal_size*100:.1f}% del capital")
+        
+        # Lógica de ajuste PRO
         if win_rate < 40:
-            self.sl = max(0.5, self.sl - 0.1)  # Más ajustado
-            self.tp = min(3.0, self.tp + 0.2)  # Necesita más recompensa
-            print(f"   📉 Ajustando: SL={self.sl}% (más ajustado), TP={self.tp}% (mayor)")
+            # Malo: necesitamos más recompensa
+            self.sl = max(0.5, self.sl - 0.1)
+            self.tp = min(4.0, self.tp + 0.3)
+            print(f"   📉 Modo defensivo: SL={self.sl}%, TP={self.tp}%")
         
-        # AJUSTE 2: Si win rate > 70%, ser más agresivo
-        elif win_rate > 70:
+        elif win_rate < 50:
+            # Peligro: ajustar más
+            self.sl = max(0.7, self.sl - 0.1)
+            self.tp = min(3.5, self.tp + 0.2)
+            print(f"   ⚠️ Modo precaución: SL={self.sl}%, TP={self.tp}%")
+        
+        elif win_rate >= 60 and total_pnl > 0:
+            # Bueno: ser más agresivo
             self.sl = min(1.5, self.sl + 0.1)
-            self.tp = max(1.0, self.tp - 0.1)
-            print(f"   📈 Ajustando: SL={self.sl}%, TP={self.tp}% (más agresivo)")
+            self.tp = max(2.0, self.tp - 0.1)
+            print(f"   📈 Modo agresivo: SL={self.sl}%, TP={self.tp}%")
         
-        # AJUSTE 3: Analizar tokens específicos
+        # Ajustar tamaño de posición
+        self.max_capital_pct = optimal_size
+        
+        # Tokens a evitar
         for sym, stats in self.token_stats.items():
-            if stats["wins"] + stats["losses"] >= 3:
-                sym_wr = stats["wins"] / (stats["wins"] + stats["losses"]) * 100
+            total = stats["wins"] + stats["losses"]
+            if total >= 3:
+                sym_wr = stats["wins"] / total * 100
                 if sym_wr < 30:
-                    print(f"   ⚠️ {sym} tiene {sym_wr:.0f}% win rate - evitar trades")
-                    # No hacer nada, el validate_entry ya tiene momentum check
+                    print(f"   ❌ {sym} con {sym_wr:.0f}% - EVITAR")
         
-        # Guardar mejores parámetros
-        if recent_pnl > 0:
+        # Guardar mejores params
+        if total_pnl > 0:
             self.best_params = {"tp": self.tp, "sl": self.sl}
-            print(f"   ✅ Mejores parámetros: TP={self.best_params['tp']}%, SL={self.best_params['sl']}%")
         
-        return {"win_rate": win_rate, "pnl": recent_pnl, "tp": self.tp, "sl": self.sl}
+        print(f"   ✅ Params: TP={self.tp}%, SL={self.sl}% | Target: {self.daily_target}%")
+        
+        return {"win_rate": win_rate, "pnl": total_pnl, "tp": self.tp, "sl": self.sl, "size": optimal_size}
     
     def get_token_confidence(self, symbol):
-        """Retorna confianza para tradear un token específico"""
+        """Retorna confianza para un token"""
         if symbol not in self.token_stats:
-            return 0.5  # Neutral
+            return 0.3  # Bajo si no hay datos
         
         stats = self.token_stats[symbol]
         total = stats["wins"] + stats["losses"]
-        if total < 3:
-            return 0.5  # No hay suficientes datos
+        if total < 2:
+            return 0.3
         
-        return stats["wins"] / total
+        wr = stats["wins"] / total
+        
+        # Ajustar por sample size
+        confidence = wr * min(1.0, total / 5)
+        
+        return max(0.1, min(1.0, confidence))
     
     def validate_entry(self, opp, state):
+        """Validación mejorada con confianza"""
         positions = state.get("positions", {})
         capital = state.get("capital_usd", 500)
         
@@ -512,21 +581,24 @@ class AdaptiveRiskManager:
         if strength < self.min_momentum:
             return False, f"Weak momentum ({strength:.1f})"
         
-        # Check capital per position
-        max_per_position = capital * self.max_capital_pct
-        if opp.get("cost", 50) > max_per_position:
-            return False, "Exceeds cap"
-        
         # Check cooldown
         last_time = self.last_entry_time.get(opp["symbol"], 0)
         if import_time() - last_time < self.cooldown_minutes * 60:
             return False, "Cooldown"
         
-        # AJUSTE 3: Feedback loop - no entrar si token tiene mal historial
+        # Check token confidence
         if self.adaptive_enabled:
             confidence = self.get_token_confidence(opp["symbol"])
-            if confidence < 0.25 and self.token_stats.get(opp["symbol"], {}).get("wins", 0) + self.token_stats.get(opp["symbol"], {}).get("losses", 0) >= 3:
+            stats = self.token_stats.get(opp["symbol"], {})
+            total = stats.get("wins", 0) + stats.get("losses", 0)
+            
+            # Si tiene historial malo, no entrar
+            if total >= 3 and confidence < 0.30:
                 return False, f"Low confidence ({confidence:.0%})"
+            
+            # Reducir tamaño si confianza baja
+            if confidence < 0.50 and total >= 2:
+                return False, f"Medium confidence ({confidence:.0%}) - esperar mejor momento"
         
         return True, "OK"
     
