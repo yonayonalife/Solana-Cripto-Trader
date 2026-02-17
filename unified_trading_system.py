@@ -54,6 +54,7 @@ from agents.risk_agent import RiskAgent, RiskLimits
 from agents.market_scanner_agent import MarketScannerAgent, Opportunity
 from paper_trading_engine import PaperTradingEngine
 from self_improver import SelfImprover
+from auto_tuner import AutoTuner
 from api.kraken_price import get_kraken_price
 from api.price_feed import get_price_feed
 
@@ -794,6 +795,7 @@ class UnifiedTradingSystem:
         self.db = TradesDatabase()
         self.ml_signal = MLSignalGenerator(self.cache)
         self.self_improver = SelfImprover()
+        self.auto_tuner = AutoTuner()
         
         # Initialize Strategy Optimizer - DISABLED due to memory leak
         # try:
@@ -917,6 +919,74 @@ class UnifiedTradingSystem:
         # Night time: reduce position slightly
         if is_night:
             conf_multiplier *= 0.9
+    
+    def get_direction_adjustment(self) -> Dict[str, float]:
+        """
+        Calculate direction adjustment based on historical win rate.
+        If shorts are losing too much (< 40% WR), bias toward longs.
+        If longs are losing too much (< 40% WR), bias toward shorts.
+        
+        Returns:
+            Dict with 'long_boost' and 'short_boost' multipliers
+        """
+        try:
+            conn = sqlite3.connect(str(PROJECT_ROOT / "data" / "trades.db"))
+            c = conn.cursor()
+            c.execute("""
+                SELECT direction, 
+                       SUM(CASE WHEN pnl > 0 THEN 1 ELSE 0 END) as wins,
+                       COUNT(*) as total
+                FROM trades 
+                WHERE status = 'closed' AND pnl IS NOT NULL
+                GROUP BY direction
+            """)
+            results = c.fetchall()
+            conn.close()
+            
+            long_wins = long_total = short_wins = short_total = 0
+            
+            for direction, wins, total in results:
+                if direction in ['bullish', 'long']:
+                    long_wins = wins if wins else 0
+                    long_total = total if total else 0
+                elif direction in ['bearish', 'short']:
+                    short_wins = wins if wins else 0
+                    short_total = total if total else 0
+            
+            # If no closed trades with pnl, return neutral
+            if long_total == 0 and short_total == 0:
+                return {'long_boost': 1.0, 'short_boost': 1.0, 'long_wr': 50, 'short_wr': 50}
+            
+            long_wr = (long_wins / long_total * 100) if long_total > 0 else 50
+            short_wr = (short_wins / short_total * 100) if short_total > 0 else 50
+            
+            # Adjust thresholds based on WR
+            # If WR < 40%, reduce threshold (less likely to take that direction)
+            # If WR > 60%, increase threshold (more likely to take that direction)
+            
+            long_boost = 1.0
+            short_boost = 1.0
+            
+            if long_wr < 40:
+                long_boost = 0.5
+                logging.warning(f"⚠️ Long WR {long_wr:.1f}% < 40%, reducing long signals")
+            elif long_wr > 60:
+                long_boost = 1.3
+                logging.info(f"📈 Long WR {long_wr:.1f}% > 60%, boosting long signals")
+            
+            if short_wr < 40:
+                short_boost = 0.5
+                logging.warning(f"⚠️ Short WR {short_wr:.1f}% < 40%, reducing short signals")
+            elif short_wr > 60:
+                short_boost = 1.3
+                logging.info(f"📉 Short WR {short_wr:.1f}% > 60%, boosting short signals")
+            
+            return {'long_boost': long_boost, 'short_boost': short_boost, 
+                    'long_wr': long_wr, 'short_wr': short_wr}
+                    
+        except Exception as e:
+            logging.debug(f"Could not calculate direction adjustment: {e}")
+            return {'long_boost': 1.0, 'short_boost': 1.0, 'long_wr': 50, 'short_wr': 50}
         
         position = base_size * conf_multiplier
         
@@ -1008,12 +1078,12 @@ class UnifiedTradingSystem:
                 # Get params from best strategy
                 if best_strategy:
                     threshold = best_strategy.get('threshold', 35)
-                    sl_pct = best_strategy.get('sl_pct', 0.04)
-                    tp_pct = best_strategy.get('tp_pct', 0.054)
+                    sl_pct = best_strategy.get('sl_pct', 0.01)
+                    tp_pct = best_strategy.get('tp_pct', 0.02)
                 else:
                     threshold = 35
-                    sl_pct = 0.04
-                    tp_pct = 0.054
+                    sl_pct = 0.01
+                    tp_pct = 0.02
                 
                 # Generate signal based on RSI
                 if rsi < threshold:
@@ -1052,6 +1122,37 @@ class UnifiedTradingSystem:
             signals.append(signal)
         
         return signals
+        
+    def apply_direction_adjustment(self, signals: List[Dict]) -> List[Dict]:
+        """
+        Apply direction adjustment based on historical win rate.
+        If shorts are performing poorly, reduce short signals.
+        If longs are performing poorly, reduce long signals.
+        """
+        adjustment = self.get_direction_adjustment()
+        
+        long_boost = adjustment['long_boost']
+        short_boost = adjustment['short_boost']
+        
+        # Log adjustment if significant
+        if long_boost != 1.0 or short_boost != 1.0:
+            logging.warning(f"🎯 Direction Adjustment: Long WR {adjustment['long_wr']:.1f}% (boost {long_boost}), Short WR {adjustment['short_wr']:.1f}% (boost {short_boost})")
+        
+        adjusted = []
+        for sig in signals:
+            sig = sig.copy()
+            direction = sig.get('direction', 'neutral')
+            confidence = sig.get('confidence', 0)
+            
+            if direction == 'bullish':
+                confidence *= long_boost
+            elif direction == 'bearish':
+                confidence *= short_boost
+            
+            sig['confidence'] = round(min(95, confidence), 1)
+            adjusted.append(sig)
+        
+        return adjusted
     
     def _load_best_strategy(self) -> Optional[Dict]:
         """Load best optimized strategy from strategy agent"""
@@ -1074,8 +1175,8 @@ class UnifiedTradingSystem:
                     
                     return {
                         "threshold": threshold,
-                        "sl_pct": params.get("sl_pct", 0.04),
-                        "tp_pct": params.get("tp_pct", 0.054),
+                        "sl_pct": params.get("sl_pct", 0.01),
+                        "tp_pct": params.get("tp_pct", 0.02),
                         "pnl": best.get("pnl", 0),
                         "win_rate": best.get("win_rate", 0)
                     }
@@ -1110,8 +1211,9 @@ class UnifiedTradingSystem:
                 logger.warning(f"⚠️ Daily loss limit reached: {loss_pct:.1%}")
                 return None
         
-        # Calculate position size
-        risk_pct = profile["max_position_pct"]
+        # Calculate position size - use auto-tuner risk if available
+        tuner_risk = self.auto_tuner.get_parameters()["risk_per_trade"]
+        risk_pct = min(profile["max_position_pct"], tuner_risk)  # Use lower of both
         size = self.calculate_position_size(balance, risk_pct, confidence, is_night)
         
         # Check minimum size
@@ -1326,9 +1428,14 @@ class UnifiedTradingSystem:
         # 2. Generate ML signals
         signals = self.generate_ml_signals(opportunities)
         
+        # 2.5 Apply direction adjustment based on historical win rate
+        signals = self.apply_direction_adjustment(signals)
+        
         # 3. Process high-confidence signals
-        # Get dynamic threshold based on recent win rate
-        min_confidence = self.self_improver.get_adjusted_confidence_threshold(10)
+        # Get dynamic threshold from self-improver AND auto-tuner (use higher)
+        improver_conf = self.self_improver.get_adjusted_confidence_threshold(10)
+        tuner_conf = self.auto_tuner.get_parameters()["confidence_threshold"]
+        min_confidence = max(improver_conf, tuner_conf)
         
         for signal in signals:
             # Skip low confidence (adjusted based on self-improvement)
@@ -1377,6 +1484,20 @@ class UnifiedTradingSystem:
         stats = self.self_improver.get_stats()
         if stats["total_trades"] > 0:
             logger.info(f"🧠 Self-Improvement: Win Rate: {stats['overall_win_rate']*100:.1f}%, Trades: {stats['total_trades']}")
+        
+        # Auto-tuner: Adjust parameters based on daily performance
+        daily_pnl = self.paper_engine.state.stats.get("total_pnl_pct", 0)
+        win_rate = stats.get("overall_win_rate", 0.5)
+        trades_today = stats.get("total_trades", 0)
+        
+        tuner_result = self.auto_tuner.analyze_and_adjust(
+            daily_pnl_pct=daily_pnl,
+            win_rate=win_rate,
+            trades_today=trades_today
+        )
+        
+        if tuner_result["adjusted"]:
+            logger.info(f"🎚️ Auto-Tuner: {tuner_result['reason']} → Conf: {tuner_result['parameters']['confidence_threshold']}%, Risk: {tuner_result['parameters']['risk_per_trade']*100:.0f}%")
         
         logger.info("✅ Trading cycle complete")
         

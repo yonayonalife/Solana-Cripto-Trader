@@ -65,6 +65,10 @@ class SelfImprover:
         """Adjust confidence threshold based on recent performance"""
         win_rate = self.get_win_rate()
         
+        # Handle None case
+        if win_rate is None:
+            win_rate = 0.5
+        
         # If win rate > 60%, lower threshold to take more trades
         # If win rate < 40%, raise threshold to be more selective
         if win_rate > 0.6:

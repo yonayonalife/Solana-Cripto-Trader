@@ -1,0 +1,10 @@
+{
+  "trades_by_signal": {
+    "ORCA_bearish": {
+      "wins": 0,
+      "losses": 1
+    }
+  },
+  "total_trades": 1,
+  "last_update": "2026-02-16T17:06:12.640386"
+}
