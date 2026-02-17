@@ -139,7 +139,7 @@ class DriftPerpetuals:
     }
     
     def __init__(self):
-        self.enabled = False  # Requiere configuración adicional
+        self.enabled = True  # ✅ Activado para perp et al
         self.leverage = 2.0  # Leverage 2x por defecto
         self.funding_rate = 0.0001  # Tasa de funding aproximada
         
@@ -547,18 +547,26 @@ class AdaptiveRiskManager:
             current = price_info.get("price", 0)
             entry = data.get("entry_price", 0)
             amt = data.get("amount", 0)
+            direction = data.get("direction", "long")
+            leverage = data.get("leverage", 1.0)
             
             if entry > 0 and amt > 0 and current > 0:
-                pnl = ((current - entry) / entry) * 100
+                # Calcular PnL según dirección
+                if direction == "short":
+                    # Para short: ganas cuando el precio baja
+                    pnl = ((entry - current) / entry) * leverage * 100
+                else:
+                    # Para long: ganas cuando el precio sube
+                    pnl = ((current - entry) / entry) * leverage * 100
                 
                 if pnl >= self.tp:
                     exits.append({"symbol": sym, "action": "TAKE_PROFIT", 
                                  "reason": f"+{pnl:.1f}%", "amount": amt, 
-                                 "price": current, "pnl": pnl})
+                                 "price": current, "pnl": pnl, "direction": direction})
                 elif pnl <= -self.sl:
                     exits.append({"symbol": sym, "action": "STOP_LOSS", 
                                  "reason": f"{pnl:.1f}%", "amount": amt, 
-                                 "price": current, "pnl": pnl})
+                                 "price": current, "pnl": pnl, "direction": direction})
         return exits
 
 
@@ -735,6 +743,42 @@ class Orchestrator:
                     self.risk.record_entry(o["symbol"])  # Record for cooldown
                     print(f"   ✅ BUY {o['symbol']} @ ${price_info.get('price', 0):.4f} - {o['reason']}")
                     trades_made += 1
+        
+        # 📉 Ejecutar SHORT trades si Drift está habilitado
+        if self.drift.enabled and short_opps:
+            for so in short_opps[:2]:  # Max 2 shorts per cycle
+                sym = so["symbol"]
+                
+                # Check if already have a short position
+                short_key = f"{sym}_SHORT"
+                if short_key in self.state.get("positions", {}):
+                    continue
+                
+                # Validar con risk manager
+                ok, msg = self.risk.validate_entry(so, self.state)
+                if not ok:
+                    continue
+                
+                price = prices.get(sym, {}).get("price", 0)
+                if price <= 0:
+                    continue
+                
+                # Ejecutar short (simulado)
+                leverage = so.get("leverage", 2.0)
+                size = self.state["capital_usd"] * 0.01 * leverage  # 1% con leverage
+                
+                # Registrar como posición short
+                self.state["positions"][short_key] = {
+                    "amount": size,
+                    "entry_price": price,
+                    "direction": "short",
+                    "leverage": leverage,
+                    "timestamp": datetime.now().isoformat()
+                }
+                
+                self.risk.record_entry(sym)
+                print(f"   📉 SHORT {sym} @ ${price:.4f} (leverage: {leverage}x) - {so['reason']}")
+                trades_made += 1
         
         # Summary
         sol_price = prices.get("SOL", {}).get("price", 0) if isinstance(prices.get("SOL"), dict) else 0
